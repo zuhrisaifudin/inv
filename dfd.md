@@ -52,14 +52,20 @@ Diagram Konteks menggambarkan batas luar sistem (*system boundary*) dan interaks
 
 ```mermaid
 flowchart TD
-    E1["E1: Pengguna / User"] <-->|"Draft Transaksi, Permintaan Material, Upload Dokumen / PDF Form Transaksi"| SYS["Sistem Persediaan & Gudang (Laravel 12 Engine)"]
-    E2["E2: Staf Gudang"] <-->|"Scan QR, Input No. Kartu & Lokasi, Stempel CHECKED / Formulir & Label QR"| SYS
-    E3["E3: Kepala Gudang"] <-->|"Verifikasi Fisik, Approval Gudang, Stempel APPROVED / Alert Notifikasi & Task Inbox"| SYS
-    E4["E4: Fungsi Persediaan"] <-->|"Verifikasi Nilai/Harga, Approval Final, Posting Ledger / Rekap Mutasi & Laporan Financial"| SYS
+    E1["E1: Pengguna / User"] -->|"Draft Transaksi, Permintaan Material, Upload Dokumen"| SYS["Sistem Persediaan & Gudang (Laravel 12 Engine)"]
+    SYS -->|"PDF Form Transaksi, Status Workflow"| E1
+    E2["E2: Staf Gudang"] -->|"Scan QR, Input No. Kartu & Lokasi"| SYS
+    SYS -->|"Formulir & Label QR, Stempel CHECKED"| E2
+    E3["E3: Kepala Gudang"] -->|"Verifikasi Fisik, Approval Gudang"| SYS
+    SYS -->|"Stempel APPROVED, Task Inbox Alert"| E3
+    E4["E4: Fungsi Persediaan"] -->|"Verifikasi Nilai/Harga, Posting Ledger"| SYS
+    SYS -->|"Rekap Mutasi & Laporan Financial"| E4
     E5["E5: Holder Material (GH OMM)"] -->|"Surat Rekapitulasi Usulan Penyisihan"| SYS
-    E6["E6: Tim Inventarisasi"] <-->|"Input Hitung Fisik (Metode 1/2), Approval Sesi / Laporan Inventarisasi"| SYS
-    E7["E7: Accounting & Management"] <--|"Dashboard Analytics, Grafik Pie/Line/Bar, Laporan Rekonsiliasi"| SYS
-    E8["E8: Super Admin"] <-->|"Pengelolaan Bank Data, Pengguna & Hak Akses Gudang / Audit Log Master"| SYS
+    E6["E6: Tim Inventarisasi"] -->|"Input Hitung Fisik (Metode 1/2)"| SYS
+    SYS -->|"Approval Sesi / Laporan Inventarisasi"| E6
+    SYS -->|"Dashboard Analytics, Grafik Pie/Line/Bar, Laporan Rekonsiliasi"| E7["E7: Accounting & Management"]
+    E8["E8: Super Admin"] -->|"Pengelolaan Bank Data, Pengguna & Scope Gudang"| SYS
+    SYS -->|"Audit Log Master"| E8
 ```
 
 ---
