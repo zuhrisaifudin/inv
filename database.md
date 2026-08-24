@@ -735,7 +735,7 @@ return new class extends Migration {
             $table->id();
             $table->uuid('transaction_id');
             $table->foreign('transaction_id')->references('id')->on('inventory_transactions')->cascadeOnDelete();
-            $table->string('document_type_code', 30);
+            $table->string('document_type_code', 30)->comment('PO, DO, BAP, BAST, ND_SPK, ND_RETUR, SJ_PEMINDAHAN, SURAT_GH_OMM');
             $table->string('file_name');
             $table->string('object_key');
             $table->string('mime_type');
@@ -775,6 +775,7 @@ return new class extends Migration {
             $table->string('required_role');
             $table->foreignId('assigned_user_id')->nullable()->constrained('users');
             $table->enum('decision', ['pending', 'approved', 'rejected', 'revision_requested'])->default('pending');
+            $table->enum('watermark_stamp', ['CHECKED', 'APPROVED'])->default('APPROVED')->comment('Stempel digital pada cetakan PDF resmi');
             $table->text('notes')->nullable();
             $table->string('actor_name_snapshot')->nullable();
             $table->string('position_snapshot')->nullable();
@@ -879,10 +880,12 @@ return new class extends Migration {
             $table->foreignId('material_id')->constrained('materials');
             $table->foreignId('stock_lot_id')->constrained('stock_lots');
             $table->foreignId('stock_label_id')->nullable()->constrained('stock_labels');
+            $table->enum('count_method', ['manual', 'qr_scan'])->default('manual')->comment('Metode 1 (Manual Count) atau Metode 2 (QR Scan Count)');
             $table->decimal('system_quantity', 14, 4);
             $table->decimal('physical_quantity', 14, 4)->nullable();
             $table->decimal('variance_quantity', 14, 4)->nullable();
-            $table->text('explanation')->nullable();
+            $table->text('explanation')->nullable()->comment('Keterangan wajib freetext jika variance_quantity != 0');
+            $table->json('scanned_label_tokens')->nullable()->comment('Audit log token QR yang di-scan jika menggunakan Metode 2');
             $table->foreignId('counted_by')->nullable()->constrained('users');
             $table->timestamp('counted_at')->nullable();
             $table->timestamps();
@@ -1350,4 +1353,58 @@ $transactions = InventoryTransaction::whereIn('source_warehouse_id', $userWareho
 ```
 
 ---
-*File ini siap digunakan sebagai referensi pengkodean Migration dan Eloquent Models pada proyek Laravel 12 Persediaan Gudang.*
+
+## 7. SQL Views & Eloquent Query Analytics untuk Dashboard (Section 17.3)
+
+Untuk mendukung visualisasi dashboard (Grafik Pie, Line Chart, & Bar Chart) sebagaimana ditentukan pada **Section 17.3 `rancangan-aplikasi-persediaan-gudang.md`** dan **Tab `DETAIL` `Detail.xlsx`**, berikut adalah rancangan *Database Views / Query Scopes*:
+
+### 7.1 View Komposisi Nilai Persediaan Material (MPS & ABT) — Grafik Pie
+```sql
+-- View Komposisi Nilai Persediaan per Gudang, Kategori, & Status Material
+CREATE OR REPLACE VIEW vw_dashboard_inventory_composition AS
+SELECT 
+    b.warehouse_id,
+    w.code AS warehouse_code,
+    w.name AS warehouse_name,
+    m.classification_id,
+    mc.code AS classification_code, -- MPS, ABT, SKL, MT, MEJ
+    m.category_id,
+    cat.name AS category_name,     -- Tubular Goods, Fitting & Flange, dll
+    COALESCE(msa.status_code, 'FM') AS material_status, -- FM, SM, PDS, DS
+    SUM(b.on_hand_quantity) AS total_on_hand_qty,
+    SUM(b.on_hand_quantity * b.average_unit_cost) AS total_inventory_value
+FROM stock_balances b
+JOIN warehouses w ON b.warehouse_id = w.id
+JOIN materials m ON b.material_id = m.id
+JOIN material_classifications mc ON m.classification_id = mc.id
+JOIN material_categories cat ON m.category_id = cat.id
+LEFT JOIN material_status_assignments msa 
+    ON m.id = msa.material_id 
+   AND b.warehouse_id = msa.warehouse_id 
+   AND CURRENT_DATE BETWEEN msa.effective_from AND COALESCE(msa.effective_until, '9999-12-31')
+GROUP BY 
+    b.warehouse_id, w.code, w.name, 
+    m.classification_id, mc.code, 
+    m.category_id, cat.name, msa.status_code;
+```
+
+### 7.2 Query Tren Saldo Akhir Bulanan (Line Chart) & Tahunan (Bar Chart)
+```php
+use Illuminate\Support\Facades\DB;
+
+// Tren Saldo Akhir Bulanan untuk Material Persediaan (MPS)
+$monthlyTrendMPS = DB::table('inventory_movements as im')
+    ->join('materials as m', 'im.material_id', '=', 'm.id')
+    ->join('material_classifications as mc', 'm.classification_id', '=', 'mc.id')
+    ->where('mc.code', 'MPS')
+    ->select(
+        DB::raw("TO_CHAR(im.occurred_at, 'YYYY-MM') as month_period"),
+        DB::raw("SUM(im.amount_delta) as monthly_net_value")
+    )
+    ->groupBy('month_period')
+    ->orderBy('month_period', 'asc')
+    ->get();
+```
+
+---
+*File ini telah diperbarui secara penuh dan sinkron dengan `rancangan-aplikasi-persediaan-gudang.md` versi 1.0 (dengan integrasi 3 tab `Detail.xlsx`).*
