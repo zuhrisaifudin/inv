@@ -324,10 +324,45 @@ flowchart TD
    - Dynamic Stempel Digital (`CHECKED` dari Staf Gudang, `APPROVED` dari Kepala Gudang & Persediaan).
    - Embedded QR Code Token transaksi.
 
-2. **Dashboard Visualisasi Analytics**:
-   - **Pie Charts**: Komposisi Nilai Persediaan MPS & ABT per Gudang, Kategori, dan Status Material (FM, SM, PDS, DS).
-   - **Line Charts**: Tren Saldo Akhir Bulanan untuk MPS & ABT.
-   - **Bar Charts**: Perbandingan Saldo Akhir Tahunan MPS & ABT.
+---
+
+## 7. Pemetaan DFD ke Arsitektur Teknis Laravel 12
+
+Untuk memastikan DFD ini dapat diimplementasikan secara langsung oleh developer backend/fullstack, setiap komponen DFD dipetakan secara eksplisit ke dalam **Struktur Modul & Class Laravel 12**:
+
+### 7.1 Pemetaan Proses Utama DFD ke Class Laravel
+
+| ID DFD | Nama Proses DFD | Controller / Livewire | Class Action / Service Domain | Eloquent Models Terlibat |
+|---|---|---|---|---|
+| **1.0** | Manajemen Pengguna & Scope Gudang | `UserController`, `WarehouseAssignmentController` | `AssignUserWarehouseScopeAction` | `User`, `Warehouse`, `UserWarehouseAssignment` |
+| **2.0** | Pengelolaan Master Bank Data | `MaterialController`, `WarehouseController` | `ImportMaterialMasterAction` | `Material`, `MaterialClassification`, `Uom` |
+| **3.0** | Transaksi Penerimaan (Inbound) | `ReceiptTransactionController` | `CreateReceiptTransactionAction`, `GenerateQrTokenAction` | `InventoryTransaction`, `TransactionDocument`, `StockLot` |
+| **4.0** | Pengeluaran & Retur (Outbound) | `IssueTransactionController` | `CreateIssueTransactionAction`, `StockReservationService` | `InventoryTransaction`, `StockBalance`, `StockReservation` |
+| **5.0** | Pemindahan Antar Gudang | `TransferTransactionController` | `ProcessInTransitTransferAction` | `InventoryTransaction`, `InventoryMovement` |
+| **6.0** | Penyisihan Material | `WriteOffTransactionController` | `QuarantineMaterialAction`, `PostWriteOffAction` | `InventoryTransaction`, `StockBalance` |
+| **7.0** | Stock Opname & Inventarisasi | `StockCountController` | `CountPhysicalStockAction` (Support Metode 1 & 2) | `StockCountSession`, `StockCountItem`, `InventoryAdjustment` |
+| **8.0** | Movement Ledger Engine | Internal Event Listener | `InventoryPostingEngine` (`DB::transaction` + `lockForUpdate`) | `InventoryMovement`, `StockBalance` |
+| **9.0** | Reporting & Analytics | `ReportController`, `DashboardController` | `GenerateExportReportJob` (Redis Queue), `DashboardAnalyticsQuery` | `vw_dashboard_inventory_composition`, `InventoryMovement` |
+
+---
+
+### 7.2 Pemetaan Transport & Layanan Infrastruktur Laravel
+
+1. **Security & Authorization Scoping**:
+   - `WarehousePolicy`: Memastikan kueri Eloquent secara otomatis ter-scope dengan `$query->whereIn('source_warehouse_id', $userWarehouseIds)` berdasarkan penugasan user di `user_warehouse_assignments`.
+   - `FormRequest Validation`: Memvalidasi batas file upload (Max 10MB, MIME pdf/jpg/png), ketersediaan stok (*available quantity validation*), dan idempotency key.
+
+2. **Database Transaction & Concurrency Control**:
+   - **Pessimistic Locking**: `StockBalance::where(...)->lockForUpdate()->first()` digunakan saat posting movement atau reservasi stok untuk mencegah *double posting* dan *overselling*.
+   - **Optimistic Concurrency**: Kolom `lock_version` pada `inventory_transactions` mencegah *lost update* saat dua approver membuka formulir bersamaan.
+
+3. **Background Processing & Event Outbox**:
+   - **Queue Jobs**: Ekspor laporan XLSX/PDF berukuran besar diproses secara asynchronous menggunakan `Laravel Queue Worker (Redis)`.
+   - **Events & Listeners**: Event `TransactionPosted` mentrigger notifikasi email/in-app dan memperbarui proyeksi agregat saldo secara instan.
+
+4. **Storage & Watermark Rendering**:
+   - **S3 / Local Private Storage**: Seluruh lampiran file wajib (`PO`, `DO`, `SPK`, `SURAT_GH_OMM`) disimpan privat dengan akses unduhan menggunakan `Storage::disk('s3_private')->temporaryUrl()`.
+   - **Dynamic Watermark PDF Generator**: Menggunakan dompdf/snappy untuk membuat PDF resmi bertanda stempel `CHECKED` atau `APPROVED` dari snapshot metadata `transaction_approvals`.
 
 ---
 *Diagram Alir Data (DFD) ini disusun secara presisi dan 100% konsisten dengan `rancangan-aplikasi-persediaan-gudang.md`, `database.md`, dan `Detail.xlsx`.*
