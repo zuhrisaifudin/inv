@@ -155,43 +155,91 @@ flowchart TB
 
 | Komponen | Pilihan baseline | Fungsi |
 |---|---|---|
-| Backend | PHP 8.3+ dan Laravel 12 | Business logic, web, API, queue, scheduler |
-| Frontend | Blade, Livewire 3, Alpine.js, Tailwind CSS | UI internal yang cepat dikembangkan |
-| Database | PostgreSQL 16 | Transaksi, constraint, locking, reporting |
-| Cache/Queue | Redis 7 | Queue notifikasi, cache, distributed lock |
-| File storage | S3-compatible storage | Dokumen transaksi dan hasil ekspor |
+| Backend | PHP 8.3+ dan Laravel 12 | Business logic, Web Controller, DataTables Service, Queue, Scheduler |
+| Frontend | Blade, jQuery, AJAX, DataTables (Yajra), Bootstrap 5 / Tailwind | UI internal dengan server-side DataTables, filter dinamis, dan AJAX modal form |
+| DataTables Engine | Yajra Laravel DataTables 11+ | Server-side processing, pagination, multi-column search, export PDF/XLSX |
+| Database | PostgreSQL 16 / MySQL 8.0 | Transaksi, constraint, locking, analytics reporting |
+| Cache/Queue | Redis 7 | Queue DataTables export, cache saldo, distributed lock |
+| File storage | S3-compatible storage | Dokumen transaksi privat dan hasil ekspor PDF/XLSX |
 | Web server | Nginx dan PHP-FPM | Runtime aplikasi |
-| Authentication | Laravel Fortify/Sanctum | Login lokal dan API token |
+| Authentication | Laravel Fortify/Sanctum | Login lokal, session security, dan API token |
 | Authorization | Laravel Policy + Spatie Permission Teams | Role/permission dengan scope gudang |
-| QR | Server-side QR generator | Label dan scan token |
+| QR | Server-side QR generator | Label QR dan scan token endpoint |
 | Monitoring | Laravel log, queue monitor, health check | Observability dan operasi |
 
-### 6.3 Struktur Domain Laravel
+### 6.3 Struktur Folder & Domain Laravel 12
+
+Aplikasi ini menggunakan struktur **Laravel 12 Modular Monolith** yang dipadukan dengan **Yajra DataTables Service** dan **AJAX Controller Pattern**:
 
 ```text
 app/
-├── Domain/
+├── DataTables/                      # Class DataTables Yajra Server-Side
+│   ├── MaterialDataTable.php
+│   ├── StockBalanceDataTable.php
+│   ├── TransactionDataTable.php
+│   ├── StockOpnameDataTable.php
+│   └── AuditLogDataTable.php
+├── Domain/                          # Core Domain Logic & Business Rules
 │   ├── Identity/
+│   │   ├── Models/
+│   │   └── Services/
 │   ├── MasterData/
+│   │   ├── Actions/
+│   │   └── Models/
 │   ├── Inventory/
+│   │   ├── Services/               # Ledger Engine, Reservation, Valuation
+│   │   └── Models/
 │   ├── Transactions/
-│   │   ├── Receipt/
-│   │   ├── Issue/
-│   │   ├── ReturnMaterial/
-│   │   ├── Transfer/
-│   │   └── WriteOff/
-│   ├── Workflow/
-│   ├── WarehouseOperations/
-│   ├── Reporting/
-│   └── Shared/
+│   │   ├── Receipt/                # Inbound (1101-1107)
+│   │   ├── Issue/                  # Outbound (2201-2206)
+│   │   ├── ReturnMaterial/         # Retur Transaksi
+│   │   ├── Transfer/               # Pemindahan Antar Gudang
+│   │   └── WriteOff/               # Penyisihan Material
+│   ├── WarehouseOperations/        # QR Code Scan, Stock Opname, Inventarisasi
+│   └── Reporting/                  # Query Analytics & Export Services
 ├── Http/
-├── Jobs/
-├── Notifications/
-├── Policies/
+│   ├── Controllers/
+│   │   ├── Admin/                  # Controller Master Data & User
+│   │   ├── Transaction/            # Controller Form, Approval & AJAX Process
+│   │   ├── Warehouse/              # Controller Posisi Stok & QR Scan
+│   │   └── Report/                 # Controller Laporan & Dashboard Analytics
+│   ├── Requests/                   # FormRequest Validation (AJAX & Web)
+│   └── Middleware/                 # WarehouseScopeMiddleware, SecurityHeader
+├── Models/                          # Eloquent Models & Relationships
+├── Policies/                        # Authorization Policies per Gudang
+├── Services/                        # PdfWatermarkGenerator, QrCodeService
 └── Support/
+
+resources/
+├── views/
+│   ├── layouts/
+│   │   └── app.blade.php           # Layout utama (Bootstrap + DataTables CSS/JS)
+│   ├── datatables/                 # Custom Action Buttons & Badge Templates
+│   │   ├── transaction_actions.blade.php
+│   │   └── status_badge.blade.php
+│   ├── pages/
+│   │   ├── transactions/           # Halaman List (DataTables) & Modals (AJAX)
+│   │   ├── stock_balances/
+│   │   ├── stock_opname/
+│   │   └── reports/
+│   └── pdf/                        # Template Cetak PDF Form + Watermark Digital
+routes/
+├── web.php                         # Route Web & AJAX DataTables Endpoints
+└── api.php                         # API Endpoint Scanner QR Code
 ```
 
-Setiap domain berisi action/use case, model, data transfer object, enum, event, dan rule yang relevan. Controller dan Livewire component hanya melakukan validasi request, authorization, memanggil use case, serta membentuk response.
+### 6.4 Pola Interaksi DataTables Server-Side & AJAX
+
+1. **Yajra DataTables Server-Side Processing**:
+   - Seluruh daftar transaksi, saldo stok, dan mutasi menggunakan `Yajra DataTables`.
+   - Pengambilan data dilakukan secara asynchronous via AJAX HTTP GET (`/transactions/datatable`).
+   - Query pada DataTables Class secara otomatis menerapkan `WarehousePolicy Scope` (`whereIn('source_warehouse_id', $userWarehouseIds)`).
+   - Mendukung pencarian instan (*instant search*), penyaringan dinamis per gudang/status (FM, SM, PDS, DS), dan pagination tanpa *reload* halaman.
+
+2. **Form Submissions & Workflow Actions via AJAX**:
+   - Form pembuatan draft, upload dokumen (`PO`/`DO`/`SPK`/`Surat GH OMM`), dan persetujuan (*Approve*/*Reject*/*Revision*) dilakukan via **AJAX POST/PATCH**.
+   - Respon AJAX mengembalikan JSON standar (`{ success: true, message: '...', redirect_url: '...' }`).
+   - Setelah persetujuan berhasil, DataTables di-refresh otomatis menggunakan method `table.ajax.reload(null, false)` tanpa mengganggu posisi halaman user.
 
 ## 7. Modul Sistem
 
