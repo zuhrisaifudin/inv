@@ -171,19 +171,46 @@ flowchart TB
 | QR | Server-side QR generator | Label QR dan scan token endpoint |
 | Monitoring | Laravel log, queue monitor, health check | Observability dan operasi |
 
-### 6.3 Struktur Folder & Domain Laravel 12
+### 6.3 Design Pattern Arsitektur Laravel 12
 
-Aplikasi ini menggunakan struktur **Laravel 12 Modular Monolith** yang dipadukan dengan **Yajra DataTables Service** dan **AJAX Controller Pattern**:
+Aplikasi ini menggabungkan **6 Design Pattern Modern** pada framework Laravel 12 untuk mendukung pengkodean yang rapi, terisolasi, aman, serta siap menangani transaksi **AJAX** dan **DataTables Server-Side**:
+
+1. **Modular Monolith / Domain-Driven Design (DDD) Light Pattern**:
+   - Logika bisnis utama dikelompokkan ke dalam **Domain Modules** (`app/Domain/Transactions`, `app/Domain/Inventory`, `app/Domain/MasterData`, `app/Domain/Reporting`).
+   - Mencegah *tight coupling* antara HTTP Controllers dengan aturan bisnis persediaan, sehingga aplikasi mudah di-maintain dan diuji.
+
+2. **Action / Single Responsibility Principle (SRP) Pattern**:
+   - Setiap penggunaan fungsi bisnis (*use case*) dibungkus dalam satu **Class Action** khusus (misal: `CreateReceiptTransactionAction`, `ProcessInTransitTransferAction`, `CountPhysicalStockAction`, `PostWriteOffAction`).
+   - Controller tetap ramping (*Thin Controller, Fat Action/Domain*).
+
+3. **DataTables Server-Side Processing Pattern (Yajra DataTable Service)**:
+   - Logika penyiapan tabel (*querying*, *sorting*, *filtering*, *badge rendering*, *action buttons*) dipisahkan ke dalam **Class DataTable** (`app/DataTables/TransactionDataTable.php`, `StockBalanceDataTable.php`).
+   - Mendukung pencarian berkecepatan tinggi, pagination server-side, dan ekspor data tanpa membebani memori browser.
+
+4. **AJAX Controller & Standardized JSON Response Pattern**:
+   - Seluruh interaksi modal, pembuatan draft, upload dokumen, serta keputusan approval (*Approve*/*Reject*/*Revision*) diproses via **AJAX POST/PATCH**.
+   - Controller mengembalikan format JSON standar (`{ success: true, message: "...", data: {...} }`), lalu frontend memperbarui tampilan secara otomatis via `table.ajax.reload(null, false)`.
+
+5. **Immutable Ledger & Balance Projection (CQRS Light) Pattern**:
+   - **Write Model**: Setiap transaksi mutasi fisik/keuangan hanya ditulis *append-only* di `inventory_movements`.
+   - **Read Model**: Tampilan saldo cepat membaca `stock_balances` (Projection Cache), dan dashboard membaca `vw_dashboard_inventory_composition` (Analytics View).
+
+6. **Policy & Query Scope Authorization Pattern**:
+   - Keamanan tingkat gudang dijamin via `WarehousePolicy` dan **Query Scope**, di mana kueri Eloquent/DataTables secara otomatis memfilter `$query->whereIn('source_warehouse_id', $userWarehouseIds)`.
+
+---
+
+### 6.4 Struktur Folder Proyek Laravel 12
 
 ```text
 app/
-├── DataTables/                      # Class DataTables Yajra Server-Side
+├── DataTables/                      # Class DataTables Yajra Server-Side (Pattern 3)
 │   ├── MaterialDataTable.php
 │   ├── StockBalanceDataTable.php
 │   ├── TransactionDataTable.php
 │   ├── StockOpnameDataTable.php
 │   └── AuditLogDataTable.php
-├── Domain/                          # Core Domain Logic & Business Rules
+├── Domain/                          # Core Domain Logic & Action Classes (Pattern 1 & 2)
 │   ├── Identity/
 │   │   ├── Models/
 │   │   └── Services/
@@ -202,7 +229,7 @@ app/
 │   ├── WarehouseOperations/        # QR Code Scan, Stock Opname, Inventarisasi
 │   └── Reporting/                  # Query Analytics & Export Services
 ├── Http/
-│   ├── Controllers/
+│   ├── Controllers/                 # Thin Controllers untuk AJAX Response (Pattern 4)
 │   │   ├── Admin/                  # Controller Master Data & User
 │   │   ├── Transaction/            # Controller Form, Approval & AJAX Process
 │   │   ├── Warehouse/              # Controller Posisi Stok & QR Scan
@@ -210,7 +237,7 @@ app/
 │   ├── Requests/                   # FormRequest Validation (AJAX & Web)
 │   └── Middleware/                 # WarehouseScopeMiddleware, SecurityHeader
 ├── Models/                          # Eloquent Models & Relationships
-├── Policies/                        # Authorization Policies per Gudang
+├── Policies/                        # Authorization Policies per Gudang (Pattern 6)
 ├── Services/                        # PdfWatermarkGenerator, QrCodeService
 └── Support/
 
@@ -232,7 +259,7 @@ routes/
 └── api.php                         # API Endpoint Scanner QR Code
 ```
 
-### 6.4 Pola Interaksi DataTables Server-Side & AJAX
+### 6.5 Pola Interaksi DataTables Server-Side & AJAX
 
 1. **Yajra DataTables Server-Side Processing**:
    - Seluruh daftar transaksi, saldo stok, dan mutasi menggunakan `Yajra DataTables`.
