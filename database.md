@@ -22,8 +22,14 @@ Prinsip utama yang diterapkan pada skema data ini:
 
 ```mermaid
 erDiagram
+    USERS ||--o{ MODEL_HAS_ROLES : assigned
+    ROLES ||--o{ MODEL_HAS_ROLES : inherits
+    ROLES ||--o{ ROLE_HAS_PERMISSIONS : grants
+    PERMISSIONS ||--o{ ROLE_HAS_PERMISSIONS : defines
+
     USERS ||--o{ USER_WAREHOUSE_ASSIGNMENTS : assigned_to
     WAREHOUSES ||--o{ USER_WAREHOUSE_ASSIGNMENTS : scopes
+    ROLES ||--o{ USER_WAREHOUSE_ASSIGNMENTS : scopes_role
     WAREHOUSES ||--o{ WAREHOUSE_LOCATIONS : contains
     ORGANIZATIONAL_FUNCTIONS ||--o{ POSITIONS : defines
     POSITIONS ||--o{ USER_POSITION_ASSIGNMENTS : holds
@@ -68,6 +74,98 @@ erDiagram
 ## 3. Skema Migration Laravel (`database/migrations`)
 
 ### 3.1 Domain Identity, Access & Organisasi
+
+#### `2026_01_01_000000_create_permission_tables.php` (Spatie Package Migration v7)
+```php
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        $teams = config('permission.teams');
+        $tableNames = config('permission.table_names');
+        $columnNames = config('permission.column_names');
+        $pivotRole = $columnNames['role_pivot_key'] ?? 'role_id';
+        $pivotPermission = $columnNames['permission_pivot_key'] ?? 'permission_id';
+
+        Schema::create($tableNames['permissions'], function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->string('name');
+            $table->string('guard_name');
+            $table->timestamps();
+            $table->unique(['name', 'guard_name']);
+        });
+
+        Schema::create($tableNames['roles'], function (Blueprint $table) use ($teams, $columnNames) {
+            $table->bigIncrements('id');
+            if ($teams || config('permission.testing', false)) {
+                $table->unsignedBigInteger($columnNames['team_foreign_key'])->nullable();
+                $table->index($columnNames['team_foreign_key'], 'roles_team_foreign_key_index');
+            }
+            $table->string('name');
+            $table->string('guard_name');
+            $table->timestamps();
+            if ($teams || config('permission.testing', false)) {
+                $table->unique([$columnNames['team_foreign_key'], 'name', 'guard_name']);
+            } else {
+                $table->unique(['name', 'guard_name']);
+            }
+        });
+
+        Schema::create($tableNames['model_has_permissions'], function (Blueprint $table) use ($tableNames, $columnNames, $pivotPermission, $teams) {
+            $table->unsignedBigInteger($pivotPermission);
+            $table->string('model_type');
+            $table->unsignedBigInteger($columnNames['model_morph_key']);
+            $table->index([$columnNames['model_morph_key'], 'model_type'], 'model_has_permissions_model_id_model_type_index');
+            $table->foreign($pivotPermission)->references('id')->on($tableNames['permissions'])->onDelete('cascade');
+            if ($teams) {
+                $table->unsignedBigInteger($columnNames['team_foreign_key']);
+                $table->index($columnNames['team_foreign_key'], 'model_has_permissions_team_foreign_key_index');
+                $table->primary([$columnNames['team_foreign_key'], $pivotPermission, $columnNames['model_morph_key'], 'model_type'], 'model_has_permissions_permission_model_type_primary');
+            } else {
+                $table->primary([$pivotPermission, $columnNames['model_morph_key'], 'model_type'], 'model_has_permissions_permission_model_type_primary');
+            }
+        });
+
+        Schema::create($tableNames['model_has_roles'], function (Blueprint $table) use ($tableNames, $columnNames, $pivotRole, $teams) {
+            $table->unsignedBigInteger($pivotRole);
+            $table->string('model_type');
+            $table->unsignedBigInteger($columnNames['model_morph_key']);
+            $table->index([$columnNames['model_morph_key'], 'model_type'], 'model_has_roles_model_id_model_type_index');
+            $table->foreign($pivotRole)->references('id')->on($tableNames['roles'])->onDelete('cascade');
+            if ($teams) {
+                $table->unsignedBigInteger($columnNames['team_foreign_key']);
+                $table->index($columnNames['team_foreign_key'], 'model_has_roles_team_foreign_key_index');
+                $table->primary([$columnNames['team_foreign_key'], $pivotRole, $columnNames['model_morph_key'], 'model_type'], 'model_has_roles_role_model_type_primary');
+            } else {
+                $table->primary([$pivotRole, $columnNames['model_morph_key'], 'model_type'], 'model_has_roles_role_model_type_primary');
+            }
+        });
+
+        Schema::create($tableNames['role_has_permissions'], function (Blueprint $table) use ($tableNames, $pivotRole, $pivotPermission) {
+            $table->unsignedBigInteger($pivotPermission);
+            $table->unsignedBigInteger($pivotRole);
+            $table->foreign($pivotPermission)->references('id')->on($tableNames['permissions'])->onDelete('cascade');
+            $table->foreign($pivotRole)->references('id')->on($tableNames['roles'])->onDelete('cascade');
+            $table->primary([$pivotPermission, $pivotRole], 'role_has_permissions_permission_id_role_id_primary');
+        });
+    }
+
+    public function down(): void
+    {
+        $tableNames = config('permission.table_names');
+        Schema::dropIfExists($tableNames['role_has_permissions']);
+        Schema::dropIfExists($tableNames['model_has_roles']);
+        Schema::dropIfExists($tableNames['model_has_permissions']);
+        Schema::dropIfExists($tableNames['roles']);
+        Schema::dropIfExists($tableNames['permissions']);
+    }
+};
+```
 
 #### `2026_01_01_000001_create_users_table.php`
 ```php
@@ -262,6 +360,7 @@ return new class extends Migration {
             $table->id();
             $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
             $table->foreignId('warehouse_id')->constrained('warehouses')->cascadeOnDelete();
+            $table->foreignId('role_id')->nullable()->constrained('roles')->nullOnDelete()->comment('Foreign Key ke Spatie Role ID');
             $table->string('role_scope', 50)->comment('warehouse_head, warehouse_staff, inventory_verifier');
             $table->date('valid_from');
             $table->date('valid_until')->nullable();
@@ -942,9 +1041,12 @@ namespace App\Models;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
+    use HasRoles; // Trait Spatie Laravel-Permission (assignRole, givePermissionTo, hasPermissionTo, dll)
+
     protected $fillable = ['employee_number', 'name', 'email', 'password', 'status', 'last_login_at'];
 
     /**
@@ -1407,4 +1509,86 @@ $monthlyTrendMPS = DB::table('inventory_movements as im')
 ```
 
 ---
-*File ini telah diperbarui secara penuh dan sinkron dengan `rancangan-aplikasi-persediaan-gudang.md` versi 1.0 (dengan integrasi 3 tab `Detail.xlsx`).*
+
+## 8. Konfigurasi Spatie Laravel-Permission (v7) & Role Permission Seeder
+
+Sesuai dokumen acuan `https://spatie.be/docs/laravel-permission/v7/installation-laravel`, sistem otorisasi pengguna menggunakan **Spatie Laravel Permission v7** yang dipadukan dengan *Warehouse Scoping Middleware*.
+
+### 8.1 Daftar Roles Spatie (`RoleSeeder.php`)
+
+```php
+namespace Database\Seeders;
+
+use Illuminate\Database\Seeder;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
+
+class RoleAndPermissionSeeder extends Seeder
+{
+    public function run(): void
+    {
+        // Reset cached roles and permissions
+        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+
+        // 1. Buat Permissions Granular
+        $permissions = [
+            // Master Data
+            'master_data.view', 'master_data.create', 'master_data.edit', 'master_data.delete',
+            // Transaksi
+            'transactions.view', 'transactions.create', 'transactions.submit',
+            'transactions.check_warehouse', 'transactions.approve_warehouse_head',
+            'transactions.verify_inventory', 'transactions.post', 'transactions.cancel', 'transactions.reverse',
+            // Opname & Inventarisasi
+            'stock_opname.create_session', 'stock_opname.input_count', 'stock_opname.approve',
+            // Laporan & Dashboard
+            'reports.view', 'reports.export', 'dashboard.view_all_warehouses', 'dashboard.view_assigned_warehouse',
+            // Admin Users
+            'users.manage', 'roles.manage',
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::findOrCreate($permission, 'web');
+        }
+
+        // 2. Buat Spatie Roles & Assign Permissions
+        $roles = [
+            'super_admin' => Permission::all(),
+            'admin_user' => ['users.manage', 'roles.manage', 'master_data.view'],
+            'pejabat_user' => ['transactions.view', 'transactions.create', 'transactions.submit', 'reports.view'],
+            'staf_gudang' => ['transactions.view', 'transactions.check_warehouse', 'stock_opname.input_count', 'reports.view'],
+            'kepala_gudang' => ['transactions.view', 'transactions.approve_warehouse_head', 'stock_opname.create_session', 'stock_opname.approve', 'reports.view'],
+            'persediaan' => ['transactions.view', 'transactions.verify_inventory', 'transactions.post', 'master_data.edit', 'reports.view', 'reports.export'],
+            'holder_material' => ['transactions.view', 'transactions.create', 'reports.view'],
+            'accounting' => ['reports.view', 'reports.export', 'dashboard.view_all_warehouses'],
+            'management' => ['reports.view', 'dashboard.view_all_warehouses'],
+            'tim_inventarisasi' => ['stock_opname.create_session', 'stock_opname.input_count', 'reports.view'],
+        ];
+
+        foreach ($roles as $roleName => $rolePermissions) {
+            $role = Role::findOrCreate($roleName, 'web');
+            $role->syncPermissions($rolePermissions);
+        }
+    }
+}
+```
+
+### 8.2 Penggunaan Spatie Permission di Middleware & Blade Template
+
+#### Di Controller / FormRequest:
+```php
+public function store(StoreReceiptRequest $request)
+{
+    $this->authorize('transactions.create');
+    // ...
+}
+```
+
+#### Di Blade Template (`resources/views`):
+```html
+@can('transactions.approve_warehouse_head')
+    <button id="btn-approve" class="btn btn-success">Approve (Kepala Gudang)</button>
+@endcan
+```
+
+---
+*File ini telah diperbarui secara penuh dan sinkron dengan `Spatie Laravel-Permission v7` dan `rancangan-aplikasi-persediaan-gudang.md`.*
