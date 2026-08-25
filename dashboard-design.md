@@ -89,43 +89,90 @@ Fokus: Entri data, Scan QR, pengisian hasil hitung fisik.
 
 ---
 
-## 3. Desain Halaman Master Data & Pengguna
+## 3. Desain Halaman Master Data & Pengguna (Bank Data)
 
-### 3.1 Manajemen Katalog Material (Bank Data)
+Sistem memiliki antarmuka khusus untuk mengelola Bank Data. Seluruh antarmuka ini dilindungi oleh permission Spatie `@can('master_data.view')` dan menggunakan **Yajra DataTables** untuk performa tinggi.
+
+### 3.1 Manajemen Katalog Material & Atribut
+Halaman ini memuat *Nav-Tabs* (AJAX Tab) untuk memisahkan entri data Material, Klasifikasi, Kategori, dan UOM.
 ```text
 +-----------------------------------------------------------------------------+
-| Katalog Bank Data Material                                                  |
-| [➕ Tambah Material Baru]   [📥 Import Excel (.xlsx)]                        |
+| 📦 MASTER DATA MATERIAL                                                     |
+| [Tab: Katalog Material] [Tab: Klasifikasi] [Tab: Kategori] [Tab: UOM]       |
++-----------------------------------------------------------------------------+
+| [➕ Tambah Material Baru]   [📥 Import Excel (.xlsx)]   [📤 Export Template] |
 +-----------------------------------------------------------------------------+
 | (DataTables AJAX)                                                           |
-| KIMAP      | Nama Barang            | Kategori   | Status | UOM | Aksi    |
-| -----------|------------------------|------------|--------|-----|---------|
-| 10001928   | VALVE GATE 4" SS       | Tubular    | MPS    | EA  | [✏️][🗑️]|
-| 90001123   | LAPTOP ASUS ROG        | Elektronik | ABT    | SET | [✏️][🗑️]|
+| KIMAP      | Nama Barang            | Klasifikasi| Kategori | UOM | Aksi    |
+| -----------|------------------------|------------|----------|-----|---------|
+| 10001928   | VALVE GATE 4" SS       | MPS        | Tubular  | EA  | [✏️][🗑️]|
+| 90001123   | LAPTOP ASUS ROG        | ABT        | Elektron | SET | [✏️][🗑️]|
++-----------------------------------------------------------------------------+
+```
+> *Interaksi Modal*: Mengklik `[➕ Tambah Material]` membuka form *Offcanvas* / Modal AJAX. Input `Klasifikasi` dan `Kategori` menggunakan Dropdown *Select2* (AJAX Search).
+
+### 3.2 Manajemen Lokasi Gudang (Warehouses & Racks/Bins)
+Digunakan oleh Super Admin untuk mendaftarkan 17 Gudang dan rincian lokasi fisik (*Zone/Rack/Bin*) di dalamnya.
+```text
++-----------------------------------------------------------------------------+
+| 🏢 MASTER DATA GUDANG & LOKASI                                              |
+| [➕ Tambah Gudang]                                                          |
++-----------------------------------------------------------------------------+
+| (DataTables AJAX - Detail Row / Nested Table)                               |
+| ⊕ Kode | Nama Gudang          | Region | Zona Waktu   | Status | Aksi       |
+| --------------------------------------------------------------------------- |
+| ⊖ MDN  | Gudang Utama Medan   | REG-1  | Asia/Jakarta | Aktif  | [✏️][⚙️]  |
+|    L Lokasi Rak/Bin (Sub-Tabel) [➕ Tambah Rak]                            |
+|      - RAK-A1 (Tipe: Rack) [✏️]                                             |
+|      - ZONE-B (Tipe: Zone) [✏️]                                             |
+| ⊕ BGR  | Gudang Utama Bogor   | REG-3  | Asia/Jakarta | Aktif  | [✏️][⚙️]  |
++-----------------------------------------------------------------------------+
+```
+> *Interaksi AJAX*: Mengklik tombol ekspansi `⊕` akan melakukan HTTP GET untuk mengambil daftar `warehouse_locations` (Rak/Bin) yang terkait dengan gudang tersebut dan merendernya dalam *Sub-Tabel* DataTables.
+
+### 3.3 Manajemen Subtipe Transaksi & Workflow
+Digunakan untuk mengontrol referensi transaksi dan dokumen wajib.
+```text
++-----------------------------------------------------------------------------+
+| 🔀 REFERENSI SUBTIPE TRANSAKSI                                              |
+| (Tabel Read-Only / Admin Edit)                                              |
+| Kode | Nama Subtipe                      | Grup        | Dokumen Wajib      |
+| -----|-----------------------------------|-------------|--------------------|
+| 1101 | Penerimaan Pembelian Rutin        | Penerimaan  | PO, DO             |
+| 2202 | Pengeluaran Operasional Gudang    | Pengeluaran | SPK                |
+| 5501 | Penyisihan / Write-Off (Quarantine)| Penyisihan | Surat_GH_OMM       |
 +-----------------------------------------------------------------------------+
 ```
 
-### 3.2 Hak Akses & Scope Gudang (Settings)
-Menetapkan gudang mana saja yang boleh dilihat/diproses oleh seorang User.
+### 3.4 Manajemen Hak Akses, Pengguna & Scope Gudang
+Menetapkan otorisasi ganda: **Spatie Roles** dan **Warehouse Scoping**.
 ```text
 +-----------------------------------------------------------------------------+
-| [Tabel Daftar Pengguna]                                                     |
+| 👥 MANAJEMEN PENGGUNA & AKSES (USER SETTINGS)                               |
++-----------------------------------------------------------------------------+
+| [Tabel Daftar Pengguna - DataTables AJAX]                                   |
 | NIP     | Nama      | Jabatan        | Role Spatie       | Aksi             |
 | 123456  | Saifudin  | Staf Logistik  | staf_gudang       | [Kelola Akses 🔑]|
 +-----------------------------------------------------------------------------+
-> KLIK [Kelola Akses 🔑] -> MUNCUL DRAWER KANAN (Offcanvas AJAX):
+> KETIKA KLIK [Kelola Akses 🔑] -> MUNCUL DRAWER KANAN (Offcanvas AJAX):
 +-----------------------------------------------------------------------------+
 | 🔑 KELOLA AKSES USER: Saifudin (123456)                                     |
-| Role Utama: [staf_gudang ▼]                                                 |
+| --------------------------------------------------------------------------- |
+| 1. PENETAPAN SPATIE ROLE (Hak Fitur Aplikasi):                              |
+|    Role Utama: [staf_gudang ▼]                                              |
 |                                                                             |
-| Pilih Gudang yang ditugaskan (Warehouse Scoping):                           |
-| [X] MDN - Gudang Medan                                                      |
-| [ ] BGR - Gudang Bogor                                                      |
-| [X] JKT - Gudang Jakarta                                                    |
+| 2. PENETAPAN SCOPE GUDANG (Hak Akses Fisik / Warehouse Scoping):            |
+|    Pilih Gudang yang ditugaskan kepada user ini:                            |
+|    [☑] MDN - Gudang Utama Medan                                             |
+|    [☐] BGR - Gudang Utama Bogor                                             |
+|    [☑] JKT - Gudang Utama Jakarta                                           |
 |                                                                             |
-| [SIMPAN PERUBAHAN]                                                          |
+| [SIMPAN PERUBAHAN VIA AJAX]                                                 |
 +-----------------------------------------------------------------------------+
 ```
+> *Backend Integration*: Saat tombol "Simpan" ditekan, backend mengeksekusi sinkronisasi ganda:
+> 1. `$user->syncRoles(['staf_gudang'])` (Spatie)
+> 2. Sinkronisasi tabel `user_warehouse_assignments` untuk Gudang MDN & JKT (Mempengaruhi `WarehousePolicy` & filtering kueri data).
 
 ---
 
