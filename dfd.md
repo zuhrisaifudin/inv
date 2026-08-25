@@ -43,6 +43,7 @@ Dokumen ini menyajikan **Diagram Alir Data (Data Flow Diagram - DFD / DAD)** unt
 | **D7** | **Dokumen Lampiran Privat** | `transaction_documents` (S3/Private Storage) |
 | **D8** | **Approval & Digital Watermark** | `transaction_approvals`, `transaction_histories` |
 | **D9** | **Stock Opname & Adjustments** | `stock_count_sessions`, `stock_count_items`, `inventory_adjustments` |
+| **D10** | **Spatie RBAC & Permissions** | `roles`, `permissions`, `model_has_roles`, `role_has_permissions` |
 
 ---
 
@@ -332,9 +333,9 @@ Untuk memastikan DFD ini dapat diimplementasikan secara langsung oleh developer 
 
 ### 7.1 Pemetaan Proses Utama DFD ke Class Laravel
 
-| ID DFD | Nama Proses DFD | Controller / Livewire | Class Action / Service Domain | Eloquent Models Terlibat |
+| ID DFD | Nama Proses DFD | Controller / Livewire | Class Action / Service Domain | Eloquent Models & Traits Terlibat |
 |---|---|---|---|---|
-| **1.0** | Manajemen Pengguna & Scope Gudang | `UserController`, `WarehouseAssignmentController` | `AssignUserWarehouseScopeAction` | `User`, `Warehouse`, `UserWarehouseAssignment` |
+| **1.0** | Manajemen Pengguna & Scope Gudang | `UserController`, `RoleController` | `AssignUserWarehouseScopeAction`, `RoleAndPermissionSeeder` | `User` (`HasRoles`), `Role`, `Permission`, `UserWarehouseAssignment` |
 | **2.0** | Pengelolaan Master Bank Data | `MaterialController`, `WarehouseController` | `ImportMaterialMasterAction` | `Material`, `MaterialClassification`, `Uom` |
 | **3.0** | Transaksi Penerimaan (Inbound) | `ReceiptTransactionController` | `CreateReceiptTransactionAction`, `GenerateQrTokenAction` | `InventoryTransaction`, `TransactionDocument`, `StockLot` |
 | **4.0** | Pengeluaran & Retur (Outbound) | `IssueTransactionController` | `CreateIssueTransactionAction`, `StockReservationService` | `InventoryTransaction`, `StockBalance`, `StockReservation` |
@@ -348,9 +349,11 @@ Untuk memastikan DFD ini dapat diimplementasikan secara langsung oleh developer 
 
 ### 7.2 Pemetaan Transport & Layanan Infrastruktur Laravel
 
-1. **Security & Authorization Scoping**:
-   - `WarehousePolicy`: Memastikan kueri Eloquent secara otomatis ter-scope dengan `$query->whereIn('source_warehouse_id', $userWarehouseIds)` berdasarkan penugasan user di `user_warehouse_assignments`.
-   - `FormRequest Validation`: Memvalidasi batas file upload (Max 10MB, MIME pdf/jpg/png), ketersediaan stok (*available quantity validation*), dan idempotency key.
+1. **Spatie Laravel-Permission (v7) & Security Scoping**:
+   - **Spatie `HasRoles` Trait**: Model `User` menggunakan `use Spatie\Permission\Traits\HasRoles;` untuk mengelola hak akses granular (`givePermissionTo()`, `assignRole()`, `hasPermissionTo()`).
+   - **Spatie RBAC Middleware**: Proteksi route pada `routes/web.php` menggunakan middleware Spatie v7 (misal: `middleware(['auth', 'permission:transactions.approve_warehouse_head'])`).
+   - **Blade Authorization**: Pengkondisian tombol dan form approval menggunakan `@can('transactions.approve_warehouse_head') ... @endcan`.
+   - **Warehouse Scoping (`WarehousePolicy`)**: Memastikan kueri Eloquent secara otomatis ter-scope dengan `$query->whereIn('source_warehouse_id', $userWarehouseIds)` berdasarkan penugasan user di `user_warehouse_assignments`.
 
 2. **Database Transaction & Concurrency Control**:
    - **Pessimistic Locking**: `StockBalance::where(...)->lockForUpdate()->first()` digunakan saat posting movement atau reservasi stok untuk mencegah *double posting* dan *overselling*.
@@ -365,4 +368,4 @@ Untuk memastikan DFD ini dapat diimplementasikan secara langsung oleh developer 
    - **Dynamic Watermark PDF Generator**: Menggunakan dompdf/snappy untuk membuat PDF resmi bertanda stempel `CHECKED` atau `APPROVED` dari snapshot metadata `transaction_approvals`.
 
 ---
-*Diagram Alir Data (DFD) ini disusun secara presisi dan 100% konsisten dengan `rancangan-aplikasi-persediaan-gudang.md`, `database.md`, dan `Detail.xlsx`.*
+*Diagram Alir Data (DFD) ini disusun secara presisi dan 100% konsisten dengan `rancangan-aplikasi-persediaan-gudang.md`, `database.md`, `Spatie Laravel-Permission v7`, dan `Detail.xlsx`.*
