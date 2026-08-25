@@ -128,7 +128,11 @@ Keterangan: `C` membuat, `R` melihat, `U` memproses, `A` menyetujui, `M` mengelo
 | Dashboard | R | R | R | R | R | R | R | M |
 | Bank Data | R | R | R | R | R | R | R | M |
 
-Implementasi permission menggunakan policy Laravel dan permission granular. Penugasan gudang tidak boleh hanya mengandalkan filter UI; pembatasan wajib diterapkan pada query dan authorization policy.
+Implementasi otorisasi dan permission menggunakan **Spatie Laravel-Permission v7** yang dipadukan dengan **Laravel Authorization Policy** dan **Warehouse Scoping Middleware**.
+
+Otorisasi sistem bekerja pada 2 tingkatan:
+1. **Tingkat Peran & Permission (Spatie RBAC)**: Membatasi aksi/fitur yang boleh dilakukan pengguna (`transactions.create`, `transactions.check_warehouse`, `transactions.approve_warehouse_head`, `transactions.verify_inventory`, `transactions.post`, dll).
+2. **Tingkat Cakupan Gudang (Warehouse Policy Scope)**: Membatasi data fisik gudang yang dapat diakses oleh pengguna sesuai penugasan di `user_warehouse_assignments`.
 
 ## 6. Arsitektur Aplikasi
 
@@ -139,7 +143,7 @@ Sistem menggunakan modular monolith. Seluruh modul berjalan dalam satu deploymen
 ```mermaid
 flowchart TB
     UI["Web UI / PWA"] --> APP["Laravel 12 Application"]
-    APP --> ID["Identity & Access"]
+    APP --> ID["Identity & Access (Spatie Permission v7)"]
     APP --> MD["Master Data"]
     APP --> TX["Inventory Transactions"]
     APP --> WF["Workflow & Approval"]
@@ -163,7 +167,7 @@ flowchart TB
 | File storage | S3-compatible storage | Dokumen transaksi privat dan hasil ekspor PDF/XLSX |
 | Web server | Nginx dan PHP-FPM | Runtime aplikasi |
 | Authentication | Laravel Fortify/Sanctum | Login lokal, session security, dan API token |
-| Authorization | Laravel Policy + Spatie Permission Teams | Role/permission dengan scope gudang |
+| Authorization | Spatie Laravel-Permission v7 + Laravel Policy | Role & Permission RBAC dengan scope gudang |
 | QR | Server-side QR generator | Label QR dan scan token endpoint |
 | Monitoring | Laravel log, queue monitor, health check | Observability dan operasi |
 
@@ -243,15 +247,18 @@ routes/
 
 ## 7. Modul Sistem
 
-### 7.1 Identity and Access Management
+### 7.1 Identity and Access Management (Spatie Permission v7)
 
-- Login, logout, lupa kata sandi, dan reset password.
-- Pengelolaan pengguna dan status aktif.
-- Penetapan peran.
-- Penetapan gudang, region, fungsi, dan jabatan.
-- Pemisahan pengguna internal dan pihak eksternal gudang jika diperlukan.
-- Session log dan riwayat login.
-- Interface untuk integrasi SSO pada fase berikutnya.
+- Login, logout, lupa kata sandi, dan reset password (Laravel Fortify).
+- Pengelolaan pengguna (`users`) dan status aktif/nonaktif.
+- **Manajemen Peran & Izin (Spatie RBAC v7)**:
+  - CRUD Roles (`super_admin`, `admin_user`, `pejabat_user`, `staf_gudang`, `kepala_gudang`, `persediaan`, `holder_material`, `accounting`, `management`, `tim_inventarisasi`).
+  - CRUD Granular Permissions (`master_data.*`, `transactions.*`, `stock_opname.*`, `reports.*`).
+  - Penetapan Spatie Roles ke Pengguna via Trait `HasRoles` (`$user->assignRole($role)`).
+- **Penetapan Scope Gudang**: Penetapan hak akses gudang fisik ke pengguna via `user_warehouse_assignments`.
+- Penetapan fungsi organisasi (`organizational_functions`), jabatan (`positions`), dan PIC.
+- Session log dan audit riwayat login.
+- Interface service untuk integrasi SSO pada fase berikutnya.
 
 ### 7.2 Bank Data
 
