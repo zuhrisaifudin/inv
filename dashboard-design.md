@@ -1,279 +1,550 @@
-# Rancangan Desain Antarmuka Keseluruhan (UI/UX)
+# Rancangan Desain Antarmuka Lengkap (UI/UX)
 ## Sistem Pengelolaan Persediaan Material dan Gudang
 
-**Versi:** 2.0 (Ekspansi Keseluruhan Aplikasi)  
-**Tanggal:** 25 Agustus 2026  
-**Dokumen Acuan:** `rancangan-aplikasi-persediaan-gudang.md`, `database.md`, `dfd.md`, `Detail.xlsx`
-
-Dokumen ini memberikan gambaran visual lengkap (wireframe konseptual) dan alur interaksi (*user flow*) untuk seluruh modul antarmuka aplikasi. Seluruh desain mengadopsi prinsip **AJAX DataTables Server-Side**, **Modal Interaktif**, dan dibatasi secara ketat oleh **Spatie Laravel Permission v7**.
+**Versi:** 3.0 (Lengkap Per Menu)
+**Tanggal:** 25 Agustus 2026
 
 ---
 
-## 1. Tata Letak Global (Global Layout)
-
-Sistem menggunakan layout standar aplikasi *enterprise* (misal: Velzon Bootstrap 5 / AdminLTE).
-
-### 1.1 Top Navigation Bar (Header)
-- **[Logo Pertamina]** & Nama Aplikasi.
-- **Warehouse Context Switcher**: Dropdown (AJAX) untuk memilih/berpindah konteks gudang aktif (hanya menampilkan gudang yang diotorisasi via `user_warehouse_assignments`).
-- **Notification Inbox**: Lonceng badge notifikasi tugas pending (*Pending Approvals*).
-- **User Profile Dropdown**: Nama, Jabatan, Role Spatie, Profil, & Logout.
-
-### 1.2 Sidebar Menu (Role-Based Visibility)
-Menu otomatis di-hide/show menggunakan `@can()`:
-- 📊 **Dashboard** (Semua Role)
-- 📦 **Master Data** (Katalog Material, Lokasi Rak/Bin) -> `@can('master_data.view')`
-- 📥 **Inbound (Penerimaan)** -> `@can('transactions.view')`
-- 📤 **Outbound (Pengeluaran & Retur)**
-- 🔄 **In-Transit (Pemindahan)**
-- 🛑 **Quarantine (Penyisihan/Write-Off)**
-- 📋 **Stock Opname & Inventarisasi** -> `@can('stock_opname.input_count')`
-- 📈 **Reporting & Analytics** -> `@can('reports.view')`
-- ⚙️ **Settings** (Pengguna & Role Spatie) -> `@can('users.manage')`
-
----
-
-## 2. Dashboard Landing Pages (Berdasarkan Role Spatie)
-
-### 2.1 Dashboard Management & Accounting (Tampilan Analitik)
-Fokus: Pemantauan nilai finansial (Grafik Pie/Line/Bar dari view `vw_dashboard_inventory_composition`).
+## TATA LETAK GLOBAL
 
 ```text
-+-----------------------------------------------------------------------------+
-| Filter: [Semua Region ▼]  [Semua Gudang ▼]  [Tahun: 2026 ▼]  [Terapkan] |
-+-----------------------------------------------------------------------------+
-| [Card: Total Nilai Persediaan] | [Card: Total MPS]    | [Card: Total ABT]   |
-|         Rp 45.500.000.000      |   Rp 30.000.000.000  |  Rp 15.500.000.000  |
-+-----------------------------------------------------------------------------+
-| +-----------------------------------+ +-----------------------------------+ |
-| | 🥧 PIE CHART: Komposisi Nilai MPS | | 🥧 PIE CHART: Komposisi Nilai ABT | |
-| | (Berdasarkan Kategori Material &  | | (Berdasarkan Status FM, SM, PDS,  | |
-| |  Status FM, SM, PDS, DS)          | |  DS)                              | |
-| +-----------------------------------+ +-----------------------------------+ |
-+-----------------------------------------------------------------------------+
-| 📈 LINE CHART: Tren Saldo Akhir Bulanan (MPS vs ABT - Sumbu X: Bulan)       |
-+-----------------------------------------------------------------------------+
-```
-> *Interaksi*: Mengubah filter dropdown memicu *AJAX request* untuk re-render chart secara instan tanpa me-reload halaman.
-
-### 2.2 Dashboard Kepala Gudang & Persediaan (Tampilan Approval)
-Fokus: Eksekusi *workflow approval* & pemantauan antrean dokumen masuk.
-
-```text
-+-----------------------------------------------------------------------------+
-| 🔔 TASK INBOX: PENDING APPROVALS (Membutuhkan Tindakan Anda)              |
-+-----------------------------------------------------------------------------+
-| [Cari Dokumen............]                              [Export Excel/PDF]  |
-|                                                                             |
-| No Transaksi | Tipe        | Pemohon    | Status Workflow   | Aksi          |
-| -------------|-------------|------------|-------------------|---------------|
-| 1101-MDN-001 | Penerimaan  | Budiman    | Menunggu Ka.Gudang| [Review 🔍]  |
-| 2202-BGR-005 | Pengeluaran | Susi Susil | Verifikasi Harga  | [Review 🔍]  |
-+-----------------------------------------------------------------------------+
-```
-
-### 2.3 Dashboard Staf Gudang (Tampilan Operasional)
-Fokus: Entri data, Scan QR, pengisian hasil hitung fisik.
-
-```text
-+-----------------------------------------------------------------------------+
-| PINTASAN CEPAT (Quick Actions)                                              |
-| [➕ Penerimaan]  [📤 Pengeluaran]  [🔄 Pemindahan]  [📷 SCAN QR LABEL]     |
-+-----------------------------------------------------------------------------+
-| 📋 CHECKLIST PEKERJAAN HARI INI                                             |
-| 1. Draft Pengeluaran BGR-002 (2 Item) -> [Lanjutkan Edit ✏️]              |
-| 2. Input Hitung Fisik Stock Opname RAK-A1 -> [Buka Form Opname 🔢]          |
-+-----------------------------------------------------------------------------+
-```
-> *Interaksi*: Klik `[SCAN QR LABEL]` memanggil library kamera HMTL5. Dekode UUID QR mengarahkan staf langsung ke halaman Transaksi/Item spesifik.
-
----
-
-## 3. Desain Halaman Master Data & Pengguna (Bank Data)
-
-Sistem memiliki antarmuka khusus untuk mengelola Bank Data. Seluruh antarmuka ini dilindungi oleh permission Spatie `@can('master_data.view')` dan menggunakan **Yajra DataTables** untuk performa tinggi.
-
-### 3.1 Manajemen Katalog Material & Atribut
-Halaman ini memuat *Nav-Tabs* (AJAX Tab) untuk memisahkan entri data Material, Klasifikasi, Kategori, dan UOM.
-```text
-+-----------------------------------------------------------------------------+
-| 📦 MASTER DATA MATERIAL                                                     |
-| [Tab: Katalog Material] [Tab: Klasifikasi] [Tab: Kategori] [Tab: UOM]       |
-+-----------------------------------------------------------------------------+
-| [➕ Tambah Material Baru]   [📥 Import Excel (.xlsx)]   [📤 Export Template] |
-+-----------------------------------------------------------------------------+
-| (DataTables AJAX)                                                           |
-| KIMAP      | Nama Barang            | Klasifikasi| Kategori | UOM | Aksi    |
-| -----------|------------------------|------------|----------|-----|---------|
-| 10001928   | VALVE GATE 4" SS       | MPS        | Tubular  | EA  | [✏️][🗑️]|
-| 90001123   | LAPTOP ASUS ROG        | ABT        | Elektron | SET | [✏️][🗑️]|
-+-----------------------------------------------------------------------------+
-```
-> *Interaksi Modal*: Mengklik `[➕ Tambah Material]` membuka form *Offcanvas* / Modal AJAX. Input `Klasifikasi` dan `Kategori` menggunakan Dropdown *Select2* (AJAX Search).
-
-### 3.2 Manajemen Lokasi Gudang (Warehouses & Racks/Bins)
-Digunakan oleh Super Admin untuk mendaftarkan 17 Gudang dan rincian lokasi fisik (*Zone/Rack/Bin*) di dalamnya.
-```text
-+-----------------------------------------------------------------------------+
-| 🏢 MASTER DATA GUDANG & LOKASI                                              |
-| [➕ Tambah Gudang]                                                          |
-+-----------------------------------------------------------------------------+
-| (DataTables AJAX - Detail Row / Nested Table)                               |
-| ⊕ Kode | Nama Gudang          | Region | Zona Waktu   | Status | Aksi       |
-| --------------------------------------------------------------------------- |
-| ⊖ MDN  | Gudang Utama Medan   | REG-1  | Asia/Jakarta | Aktif  | [✏️][⚙️]  |
-|    L Lokasi Rak/Bin (Sub-Tabel) [➕ Tambah Rak]                            |
-|      - RAK-A1 (Tipe: Rack) [✏️]                                             |
-|      - ZONE-B (Tipe: Zone) [✏️]                                             |
-| ⊕ BGR  | Gudang Utama Bogor   | REG-3  | Asia/Jakarta | Aktif  | [✏️][⚙️]  |
-+-----------------------------------------------------------------------------+
-```
-> *Interaksi AJAX*: Mengklik tombol ekspansi `⊕` akan melakukan HTTP GET untuk mengambil daftar `warehouse_locations` (Rak/Bin) yang terkait dengan gudang tersebut dan merendernya dalam *Sub-Tabel* DataTables.
-
-### 3.3 Manajemen Subtipe Transaksi & Workflow
-Digunakan untuk mengontrol referensi transaksi dan dokumen wajib.
-```text
-+-----------------------------------------------------------------------------+
-| 🔀 REFERENSI SUBTIPE TRANSAKSI                                              |
-| (Tabel Read-Only / Admin Edit)                                              |
-| Kode | Nama Subtipe                      | Grup        | Dokumen Wajib      |
-| -----|-----------------------------------|-------------|--------------------|
-| 1101 | Penerimaan Pembelian Rutin        | Penerimaan  | PO, DO             |
-| 2202 | Pengeluaran Operasional Gudang    | Pengeluaran | SPK                |
-| 5501 | Penyisihan / Write-Off (Quarantine)| Penyisihan | Surat_GH_OMM       |
-+-----------------------------------------------------------------------------+
-```
-
-### 3.4 Manajemen Hak Akses, Pengguna & Scope Gudang
-Menetapkan otorisasi ganda: **Spatie Roles** dan **Warehouse Scoping**.
-```text
-+-----------------------------------------------------------------------------+
-| 👥 MANAJEMEN PENGGUNA & AKSES (USER SETTINGS)                               |
-+-----------------------------------------------------------------------------+
-| [Tabel Daftar Pengguna - DataTables AJAX]                                   |
-| NIP     | Nama      | Jabatan        | Role Spatie       | Aksi             |
-| 123456  | Saifudin  | Staf Logistik  | staf_gudang       | [Kelola Akses 🔑]|
-+-----------------------------------------------------------------------------+
-> KETIKA KLIK [Kelola Akses 🔑] -> MUNCUL DRAWER KANAN (Offcanvas AJAX):
-+-----------------------------------------------------------------------------+
-| 🔑 KELOLA AKSES USER: Saifudin (123456)                                     |
-| --------------------------------------------------------------------------- |
-| 1. PENETAPAN SPATIE ROLE (Hak Fitur Aplikasi):                              |
-|    Role Utama: [staf_gudang ▼]                                              |
-|                                                                             |
-| 2. PENETAPAN SCOPE GUDANG (Hak Akses Fisik / Warehouse Scoping):            |
-|    Pilih Gudang yang ditugaskan kepada user ini:                            |
-|    [☑] MDN - Gudang Utama Medan                                             |
-|    [☐] BGR - Gudang Utama Bogor                                             |
-|    [☑] JKT - Gudang Utama Jakarta                                           |
-|                                                                             |
-| [SIMPAN PERUBAHAN VIA AJAX]                                                 |
-+-----------------------------------------------------------------------------+
-```
-> *Backend Integration*: Saat tombol "Simpan" ditekan, backend mengeksekusi sinkronisasi ganda:
-> 1. `$user->syncRoles(['staf_gudang'])` (Spatie)
-> 2. Sinkronisasi tabel `user_warehouse_assignments` untuk Gudang MDN & JKT (Mempengaruhi `WarehousePolicy` & filtering kueri data).
-
----
-
-## 4. Desain Halaman Transaksi & Formulir Input (AJAX Grid)
-
-### 4.1 Halaman Daftar Transaksi (Transaction History)
-```text
-+-----------------------------------------------------------------------------+
-| Riwayat Transaksi Keluar/Masuk                                              |
-| Filter: [Date Range 📅] [Semua Subtipe ▼] [Gudang Tujuan ▼] [Status ▼]    |
-+-----------------------------------------------------------------------------+
-| No Transaksi | Tipe/Subtipe | Tgl Trx    | Status / Tahap     | Aksi        |
-| -------------|--------------|------------|--------------------|-------------|
-| 2201-MDN-001 | Pengeluaran  | 25-08-2026 | [🟢 APPROVED]      | [Lihat 👁️] |
-| 5501-JKT-002 | Penyisihan   | 24-08-2026 | [🟠 PENDING GUDANG]| [Review 🔍] |
-| 1102-BGR-009 | Penerimaan   | 23-08-2026 | [⚪ DRAFT]         | [Edit ✏️]   |
-+-----------------------------------------------------------------------------+
-```
-
-### 4.2 Formulir Input Transaksi (Form Mode: Create/Edit Draft)
-Form ini dirancang menghindari reload halaman. Pengecekan stok dilakukan instan.
-```text
-+-----------------------------------------------------------------------------+
-| FORMULIR PENGELUARAN MATERIAL (DRAFT)                                       |
-+-----------------------------------------------------------------------------+
-| Gudang Asal  : [MDN - Medan (Readonly)]                                     |
-| Subtipe Trx  : [2202 - Pengeluaran Operasional ▼]                           |
-| Lampiran Dok : [Upload Surat DO/SPK (PDF) 📎]  (*Mandatory validation)      |
-| Keterangan   : [Input teks bebas...]                                        |
-+-----------------------------------------------------------------------------+
-| DETAIL ITEM MATERIAL                                                        |
-| +-------------------------------------------------------------------------+ |
-| | Cari KIMAP/Nama Barang | Sisa Stok Gudang | Qty Diminta | UOM | Hapus | |
-| | [Select2 AJAX...... ▼] | 15 EA (Readonly) | [  5  ]     | EA  | [🗑️] | |
-| | [Select2 AJAX...... ▼] | 2 EA  (Readonly) | [  3  ] <!! | EA  | [🗑️] | |
-| +-------------------------------------------------------------------------+ |
-| *Peringatan: Qty Diminta melebihi sisa stok (2 EA).                         |
-|                                                                             |
-| [➕ Tambah Baris Material]               [📷 Scan QR Barang]                 |
-+-----------------------------------------------------------------------------+
-| [Batal]                                   [Simpan Draft] [Ajukan Approval 🚀]|
-+-----------------------------------------------------------------------------+
++---------------------------+--------------------------------------------------+
+| [Logo] Inventory System   | [Gudang: MDN Medan ▼] [🔔 3] [Saifudin ▼]       |
++---------------------------+--------------------------------------------------+
+| 📊 Dashboard              |                                                  |
+| 📦 Master Data          ⌄ | ← CONTENT AREA (AJAX - Berganti tanpa reload)   |
+|    ├ Katalog Material     |                                                  |
+|    ├ Gudang & Lokasi      |                                                  |
+|    ├ Subtipe Transaksi    |                                                  |
+|    └ Klasifikasi & UOM    |                                                  |
+| 📥 Inbound                |                                                  |
+| 📤 Outbound             ⌄ |                                                  |
+|    ├ Pengeluaran          |                                                  |
+|    └ Retur Material       |                                                  |
+| 🔄 In-Transit             |                                                  |
+| 🛑 Quarantine             |                                                  |
+| 📋 Stock Opname         ⌄ |                                                  |
+|    ├ Stock Opname         |                                                  |
+|    └ Inventarisasi        |                                                  |
+| 📈 Reporting            ⌄ |                                                  |
+|    ├ Laporan Mutasi       |                                                  |
+|    ├ Laporan Rekonsiliasi |                                                  |
+|    └ Dashboard Analytics  |                                                  |
+| ⚙️  Settings            ⌄ |                                                  |
+|    ├ Pengguna & Akses     |                                                  |
+|    ├ Roles & Permissions  |                                                  |
+|    └ Audit Log            |                                                  |
++---------------------------+--------------------------------------------------+
 ```
 
 ---
 
-## 5. Desain Halaman Approval & Watermark Digital (Modal AJAX)
+## MENU 1: 📊 DASHBOARD
+**Akses:** Semua Role | **Permission:** `dashboard.view_assigned_warehouse` / `dashboard.view_all_warehouses`
 
-Ketika pejabat (Kepala Gudang / Fungsi Persediaan) mengklik `[Review 🔍]`, sebuah **Modal Besar** akan muncul di tengah layar.
+### 1A — Dashboard Management & Accounting
 ```text
-+-----------------------------------------------------------------------------+
-| 🔍 PERSETUJUAN TRANSAKSI: 2202-BGR-005                                [X]   |
-+-----------------------------------------------------------------------------+
-| KIRI: PREVIEW DOKUMEN & FORM          | KANAN: HISTORI AUDIT & AKSI         |
-| +-----------------------------------+ | +---------------------------------+ |
-| |  [PDF VIEWER / FORM RENDER]       | | Log Approval:                     | |
-| |  Pertamina Inventory System       | | 1. ⚪ Draft (Budi - 10:00)        | |
-| |  No: 2202-BGR-005                 | | 2. 🟢 Checked (Staf - 10:30)      | |
-| |  ...                              | | 3. 🟡 Menunggu Kepala Gudang      | |
-| |  [Stempel 'CHECKED' Muncul]       | |                                   | |
-| |  [Stempel 'APPROVED' (Blank)]     | | Lampiran Dokumen Referensi:       | |
-| |  ...                              | | 📎 PO-12345.pdf [Unduh/Lihat]     | |
-| +-----------------------------------+ | +---------------------------------+ |
-|                                       | Catatan Penolakan/Revisi:           |
-|                                       | [Textarea.......................]   |
-+-----------------------------------------------------------------------------+
-| [Tolak Transaksi ❌]   [Kembalikan untuk Revisi 🔄]   [✅ BUBOHKAN APPROVED] |
-+-----------------------------------------------------------------------------+
++═════════════════════════════════════════════════════════════════════════════+
+║  DASHBOARD ANALITIK — PERTAMINA INVENTORY SYSTEM                           ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║ Filter: [Semua Region ▼]  [17 Gudang ▼]  [Periode: 2026 ▼]  [Terapkan]  ║
+╠═══════════════╦════════════════════╦════════════════════╦═══════════════════╣
+║   TOTAL NILAI  ║    NILAI MPS       ║    NILAI ABT       ║  TRANSAKSI BULAN ║
+║ Rp45,5 Miliar ║ Rp30,0 Miliar      ║ Rp15,5 Miliar      ║   +127 Transaksi ║
+╠═══════════════╩════════════════════╩════════════════════╩═══════════════════╣
+║                                                                             ║
+║  ┌──────────────────────────────┐  ┌──────────────────────────────────────┐ ║
+║  │  🥧 Komposisi Nilai MPS      │  │  🥧 Komposisi Nilai ABT              │ ║
+║  │                              │  │                                      │ ║
+║  │     FM: 65%                  │  │     FM: 80%                          │ ║
+║  │     SM: 20%                  │  │     SM: 10%                          │ ║
+║  │     PDS: 10%                 │  │     PDS: 7%                          │ ║
+║  │     DS:  5%                  │  │     DS:  3%                          │ ║
+║  │   (per Gudang & Kategori)    │  │   (per Gudang & Kategori)            │ ║
+║  └──────────────────────────────┘  └──────────────────────────────────────┘ ║
+║                                                                             ║
+║  ┌───────────────────────────────────────────────────────────────────────┐  ║
+║  │  📈 Tren Saldo Akhir Bulanan (MPS vs ABT) — Line Chart               │  ║
+║  │  Rp │                                   ╭────╮                        │  ║
+║  │     │                          ╭────────╯    ╰───── MPS               │  ║
+║  │     │               ╭──────────╯                                      │  ║
+║  │     │──────╮────────╯                               ABT               │  ║
+║  │     └──────────────────────────────────────────────────────── Bulan   │  ║
+║  │      Jan   Feb   Mar   Apr   Mei   Jun   Jul   Agu                    │  ║
+║  └───────────────────────────────────────────────────────────────────────┘  ║
+║                                                                             ║
+║  ┌───────────────────────────────────────────────────────────────────────┐  ║
+║  │  📊 Perbandingan Saldo Tahunan Per Gudang — Bar Chart                 │  ║
+║  │                                                                       │  ║
+║  │      MDN    BGR    JKT    SBY    PKR    BPN   ...                    │  ║
+║  │      ▐█▌    ▐█▌    ▐█▌    ▐█▌    ▐█▌    ▐█▌                         │  ║
+║  └───────────────────────────────────────────────────────────────────────┘  ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 ```
-> *Interaksi AJAX*:
-> Saat `[✅ BUBOHKAN APPROVED]` ditekan, request dikirim ke backend. Sistem (dompdf/snappy) akan merender ulang PDF, meletakkan gambar stempel **APPROVED** di kolom tanda tangan elektronik, lalu menyimpannya ke S3 Private Server. DataTables di-refresh instan.
+
+### 1B — Dashboard Kepala Gudang / Persediaan
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  DASHBOARD KEPALA GUDANG / FUNGSI PERSEDIAAN                                ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  ║
+║  │ 🔔 Pending       │  │ ✅ Approved Today │  │ 🔄 Draft (Belum Submit)  │  ║
+║  │    Approval: 8   │  │      Trx: 15     │  │       Trx: 3             │  ║
+║  └──────────────────┘  └──────────────────┘  └──────────────────────────┘  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  🔔 ANTRIAN TASK INBOX — Membutuhkan Tindakan Anda                          ║
+║  [Cari no. transaksi.........] [Semua Tipe ▼] [Status Saya ▼]              ║
+║                                                                             ║
+║  No. Transaksi  │ Tipe          │ Gudang  │ Pemohon   │ Tahap       │ Aksi  ║
+║  ───────────────┼───────────────┼─────────┼───────────┼─────────────┼────── ║
+║  1101-MDN-0021  │ Penerimaan PO │ MDN     │ Budi S.   │ ⏳Ka.Gudang │[👁️]  ║
+║  2202-BGR-0008  │ Pengeluaran   │ BGR     │ Susi A.   │ ⏳Persediaan│[👁️]  ║
+║  5501-JKT-0003  │ Penyisihan    │ JKT     │ Anton R.  │ ⏳Ka.Gudang │[👁️]  ║
+║  << Halaman 1 dari 3 >>                                                     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+### 1C — Dashboard Staf Gudang (Operasional Harian)
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  DASHBOARD OPERASIONAL — GUDANG: MDN MEDAN                                  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  ⚡ AKSI CEPAT                                                               ║
+║  [➕ Buat Penerimaan]  [📤 Buat Pengeluaran]  [🔄 Pemindahan]  [📷 SCAN QR] ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  📋 PEKERJAAN HARI INI                                                      ║
+║  ┌────────────────────────────────────────────────────────────────────────┐ ║
+║  │ 1. DRAFT: Pengeluaran Operasional BGR-002 (3 item) → [Lanjutkan ✏️] │ ║
+║  │ 2. DRAFT: Stock Opname RAK-A1 (25 Material) → [Buka Form Input 🔢]  │ ║
+║  └────────────────────────────────────────────────────────────────────────┘ ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  ⚠️ PERINGATAN STOK KRITIS (Low Stock Alert)                                 ║
+║  Material: Valve Gate 4" SS │ Sisa: 2 EA │ Lokasi: RAK-A1  [Lihat 👁️]     ║
+║  Material: Pipa Seamless 8" │ Sisa: 0 MTR│ Lokasi: ZONE-B  [Lihat 👁️]     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
-## 6. Desain Halaman Stock Opname & Hitung Fisik (Inventarisasi)
+## MENU 2: 📦 MASTER DATA
+**Akses:** `@can('master_data.view')` | Edit: `@can('master_data.edit')`
 
-### 6.1 Input Form Hitung Fisik (Editable Grid)
-Dirancang khusus agar Staf Gudang / Tim Inventarisasi bisa menginput saldo fisik di lapangan menggunakan Tablet/iPad.
-
+### 2.1 — Katalog Material
 ```text
-+-----------------------------------------------------------------------------+
-| SESI STOCK OPNAME: SO-MDN-202608-01 (Gudang Medan, RAK-A1)                  |
-+-----------------------------------------------------------------------------+
-| Tipe Input: [🔘 Metode 1: Manual Grid]  [🔘 Metode 2: Scan QR Agregasi]      |
-+-----------------------------------------------------------------------------+
-| Daftar Material (Filter: RAK-A1)                                            |
-|                                                                             |
-| KIMAP    | Nama Barang       | Qty Sistem | QTY FISIK | Selisih | Catatan   |
-|----------|-------------------|------------|-----------|---------|-----------|
-| 10001928 | Valve Gate 4"     | 50 EA      | [ 50 ] EA | 0       | [       ] |
-| 10002133 | Pipa Seamless 8"  | 10 MTR     | [  8 ] MTR| -2 MTR  | [Rusak..] |
-| 90001123 | Laptop Asus       | 2 SET      | [  2 ] SET| 0       | [       ] |
-+-----------------------------------------------------------------------------+
-| *Jika ada selisih, kolom 'Catatan' WAJIB DIISI sebelum bisa disimpan.       |
-|                                                                             |
-| [Simpan Hasil Hitung Fisik 💾]          [Ajukan Approval Sesi Inventarisasi] |
-+-----------------------------------------------------------------------------+
++═════════════════════════════════════════════════════════════════════════════+
+║  📦 KATALOG MATERIAL (BANK DATA)                                            ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [Tab: Katalog Material ✔] [Tab: Klasifikasi] [Tab: Kategori] [Tab: UOM]    ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  @can('master_data.create') [➕ Tambah Material]  @endcan                   ║
+║  [📥 Import Excel]  [📤 Export Template]                                    ║
+║  [Cari KIMAP atau Nama Barang.......]  [Klasifikasi: Semua ▼] [Status ▼]   ║
+╠══════════╦════════════════════════╦════════════╦══════════╦═════╦══════════╣
+║  KIMAP   ║  Nama Barang           ║ Klasifikasi║ Kategori ║ UOM ║  Aksi    ║
+╠══════════╬════════════════════════╬════════════╬══════════╬═════╬══════════╣
+║ 10001928 ║ VALVE GATE 4" SS 316   ║ 🟦 MPS     ║ Tubular  ║ EA  ║ [✏️][🗑️] ║
+║ 10002133 ║ PIPA SEAMLESS 8"       ║ 🟦 MPS     ║ Tubular  ║ MTR ║ [✏️][🗑️] ║
+║ 90001123 ║ LAPTOP ASUS ROG G15    ║ 🟩 ABT     ║ Elektron ║ SET ║ [✏️][🗑️] ║
+╚══════════╩════════════════════════╩════════════╩══════════╩═════╩══════════╝
 ```
-> *Interaksi*: 
-> - Angka selisih dihitung *real-time* via JavaScript saat user mengetik `QTY FISIK`. 
-> - Kolom catatan akan berubah warna jadi merah (harus diisi) jika selisih != 0.
+> Klik `[➕ Tambah Material]` → Modal AJAX:
+```text
+┌─────────────────── FORM TAMBAH MATERIAL ─────────────────┐
+│ KIMAP (No. Katalog) : [___________________________]        │
+│ Nama Barang         : [___________________________]        │
+│ Klasifikasi         : [MPS ▼ ] (Select2 AJAX)             │
+│ Kategori            : [Tubular Goods ▼] (Select2 AJAX)    │
+│ UOM Dasar           : [EA ▼ ]                             │
+│ Deskripsi           : [Textarea...]                        │
+│ Serialized? (berSN) : [○ Ya  ● Tidak]                     │
+│                                                           │
+│              [Batal]   [💾 Simpan Material]               │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 2.2 — Gudang & Lokasi Penyimpanan
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🏢 MASTER GUDANG & LOKASI PENYIMPANAN (17 Gudang)                         ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  @can('master_data.create') [➕ Tambah Gudang] @endcan                      ║
+╠═════╦════════════════════════╦════════╦══════════════╦════════╦════════════╣
+║ Kode║  Nama Gudang           ║ Region ║ Zona Waktu   ║ Status ║ Aksi       ║
+╠═════╬════════════════════════╬════════╬══════════════╬════════╬════════════╣
+║ ⊕MDN║ Gudang Utama Medan     ║ REG-1  ║ Asia/Jakarta ║ 🟢Aktif║ [✏️][⚙️Rak]║
+║ ─── Lokasi Rak/Bin (expand dengan klik ⊕): ────────────────────────────── ║
+║     │ [➕ Tambah Rak/Bin] [Kode: RAK-A1 | Tipe: Rack] [✏️][🗑️]           ║
+║     │                    [Kode: ZONE-B  | Tipe: Zone] [✏️][🗑️]           ║
+║     │                    [Kode: QRN-01  | Tipe: Quarantine] [✏️][🗑️]     ║
+║ ⊕BGR║ Gudang Utama Bogor     ║ REG-3  ║ Asia/Jakarta ║ 🟢Aktif║ [✏️][⚙️Rak]║
+║ ⊕JKT║ Gudang Pusat Jakarta   ║ REG-2  ║ Asia/Jakarta ║ 🟢Aktif║ [✏️][⚙️Rak]║
+╚═════╩════════════════════════╩════════╩══════════════╩════════╩════════════╝
+```
+
+### 2.3 — Klasifikasi, Kategori & UOM (Referensi)
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  [Tab: Klasifikasi] [Tab: Kategori Material] [Tab: UOM] [Tab: Subtipe Trx] ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  TAB: KLASIFIKASI MATERIAL                                                  ║
+║  Kode │ Nama Klasifikasi               │ Keterangan                │ Aksi   ║
+║  ─────┼────────────────────────────────┼───────────────────────────┼─────── ║
+║  MPS  │ Material Persediaan            │ Persediaan Operasional    │ [✏️]   ║
+║  ABT  │ Aset Belum Tercatat            │ Aset Tetap yg blm tercatat│ [✏️]   ║
+║  SKL  │ Material Skala                 │ -                         │ [✏️]   ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  TAB: SUBTIPE TRANSAKSI (Dengan Dokumen Wajib)                              ║
+║  Kode │ Nama Subtipe                   │ Grup        │ Dok. Wajib  │ Aksi   ║
+║  ─────┼────────────────────────────────┼─────────────┼─────────────┼─────── ║
+║  1101 │ Penerimaan Pembelian Rutin     │ Inbound     │ PO, DO      │ [✏️]   ║
+║  2202 │ Pengeluaran Operasional        │ Outbound    │ SPK         │ [✏️]   ║
+║  5501 │ Penyisihan / Write-Off         │ Quarantine  │ Surat GH OMM│ [✏️]   ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
-*Dokumen desain UI/UX lengkap ini menjadi fondasi bagi tim Frontend (menggunakan Bootstrap 5, AJAX, DataTables, Select2) untuk merakit antarmuka aplikasi secara presisi.*
+
+## MENU 3: 📥 INBOUND (PENERIMAAN MATERIAL)
+**Akses:** `@can('transactions.view')` | Buat: `@can('transactions.create')`
+
+### 3.1 — Daftar Transaksi Penerimaan
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📥 PENERIMAAN MATERIAL (INBOUND)                                           ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  @can('transactions.create') [➕ Buat Penerimaan Baru] @endcan               ║
+║  Filter: [Tanggal: 01-08-2026 s/d 25-08-2026 📅] [Subtipe ▼] [Status ▼]   ║
+╠══════════════════╦══════════╦═══════════╦══════════════╦════════════════════╣
+║  No. Transaksi   ║ Subtipe  ║ Tgl Trx   ║ Pemohon      ║ Status      │ Aksi ║
+╠══════════════════╬══════════╬═══════════╬══════════════╬═════════════╪══════╣
+║ 1101-MDN-202608-0│ Perm.PO  ║ 25-08-2026║ Budi S.      ║ 🟢 APPROVED │[👁️] ║
+║ 1102-BGR-202608-0│ Transfer ║ 24-08-2026║ Susi A.      ║ 🟠 ⏳Gudang  │[👁️] ║
+║ 1105-JKT-202608-0│ Retur    ║ 23-08-2026║ Anton R.     ║ ⚪ DRAFT     │[✏️] ║
+╚══════════════════╩══════════╩═══════════╩══════════════╩═════════════╩══════╝
+```
+
+### 3.2 — Form Buat / Edit Draft Penerimaan
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📥 FORMULIR PENERIMAAN MATERIAL                              [DRAFT]       ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  HEADER TRANSAKSI                                                           ║
+║  ┌──────────────────────────────────────────────────────────────────────┐  ║
+║  │ Subtipe Transaksi : [1101 - Penerimaan Pembelian Rutin ▼]           │  ║
+║  │ Gudang Penerima   : [MDN - Gudang Utama Medan (readonly)]           │  ║
+║  │ Tanggal Transaksi : [25 Agustus 2026 📅]                            │  ║
+║  │ No. Referensi PO  : [PO-2026-12345_____________]                    │  ║
+║  │ Keterangan        : [Penerimaan rutin Q3 2026__________]            │  ║
+║  │ Upload Dokumen    : [📎 Upload PO (PDF, max 10MB)] ← *WAJIB*        │  ║
+║  │                    [📎 Upload DO/Surat Jalan] ← *WAJIB*             │  ║
+║  └──────────────────────────────────────────────────────────────────────┘  ║
+║                                                                             ║
+║  DETAIL ITEM MATERIAL                                                       ║
+║  ┌────────────────────────────────────────────────────────────────────────┐ ║
+║  │ Material (KIMAP/Nama) │ Lokasi Rak/Bin │ Qty Terima │ UOM │ Hapus     │ ║
+║  │ ──────────────────────┼───────────────┼────────────┼─────┼────────── │ ║
+║  │ [Select2 AJAX... ▼]   │ [RAK-A1 ▼]    │ [  50  ]   │ EA  │ [🗑️]      │ ║
+║  │ [Select2 AJAX... ▼]   │ [ZONE-B ▼]    │ [  10  ]   │ MTR │ [🗑️]      │ ║
+║  │                                                                        │ ║
+║  │ [➕ Tambah Baris Material]                     [📷 Scan QR Material]  │ ║
+║  └────────────────────────────────────────────────────────────────────────┘ ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [← Batal]                     [💾 Simpan Draft]  [🚀 Ajukan Approval →]  ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+### 3.3 — Detail Transaksi & Workflow Approval (View Mode)
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  👁️  DETAIL PENERIMAAN 1101-MDN-202608-0021                                ║
+╠══════════════════════════════════════╦══════════════════════════════════════╣
+║  INFO TRANSAKSI                      ║  HISTORI WORKFLOW APPROVAL           ║
+║  No. Transaksi: 1101-MDN-202608-0021 ║  ─────────────────────────────────  ║
+║  Subtipe: Penerimaan Pembelian       ║  ✅ Dibuat Draft — Budi S. 08:00     ║
+║  Gudang : MDN - Medan                ║  ✅ Cek Fisik Gudang — Agus 09:30    ║
+║  Tgl Trx: 25 Agustus 2026           ║  ✅ CHECKED (Stempel) — Staf         ║
+║  Status : 🟢 APPROVED               ║  ✅ Approve Ka.Gudang — Hendra 10:15 ║
+║                                      ║  ✅ Verifikasi Persediaan — Dewi     ║
+║  LAMPIRAN DOKUMEN                    ║  ✅ APPROVED (Stempel) — Final       ║
+║  📎 PO-2026-12345.pdf [👁️ Lihat]    ║                                      ║
+║  📎 DO-Surat-Jalan.pdf [👁️ Lihat]   ║                                      ║
+╠══════════════════════════════════════╩══════════════════════════════════════╣
+║  DETAIL ITEM YANG DITERIMA                                                  ║
+║  KIMAP    │ Nama Barang          │ Qty Terima │ UOM │ Lokasi  │ Label QR   ║
+║  ─────────┼──────────────────────┼────────────┼─────┼─────────┼─────────── ║
+║  10001928 │ VALVE GATE 4" SS 316 │ 50         │ EA  │ RAK-A1  │ [🏷️ Print] ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  @can('transactions.check_warehouse') [✅ BUBUHKAN STEMPEL CHECKED] @endcan ║
+║  @can('transactions.approve_warehouse_head') [✅ APPROVE] [❌ TOLAK] @endcan ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## MENU 4: 📤 OUTBOUND (PENGELUARAN & RETUR)
+
+### 4.1 — Pengeluaran Material (Tampilan & Form)
+Form hampir identik dengan Inbound, namun dengan perbedaan:
+- Menampilkan **sisa stok tersedia** secara real-time dari `stock_balances`.
+- Validasi otomatis: jika Qty Diminta > Stok Tersedia, input berubah **merah** & submit di-*disable*.
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📤 FORMULIR PENGELUARAN MATERIAL                              [DRAFT]      ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Subtipe   : [2202 - Pengeluaran Operasional ▼]                             ║
+║  Gudang    : [MDN - Gudang Utama Medan (readonly)]                          ║
+║  Upload SPK: [📎 Upload SPK (PDF, max 10MB)] ← *WAJIB*                     ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  DETAIL ITEM MATERIAL                                                       ║
+║  Material (KIMAP)   │ Stok Tersedia │ Qty Diminta │ UOM │ Hapus             ║
+║  ───────────────────┼───────────────┼─────────────┼─────┼────────────────  ║
+║  Valve Gate 4" SS   │  50 EA        │ [  5  ]     │ EA  │ [🗑️]             ║
+║  Pipa Seamless 8"   │   2 MTR       │ [  5  ] ⚠️  │ MTR │ [🗑️]             ║
+║                                                                             ║
+║  ⚠️ PERINGATAN: Qty melebihi stok tersedia (2 MTR)! Submit dinonaktifkan.  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [← Batal]                     [💾 Simpan Draft]  [🚀 Ajukan Approval →]  ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+### 4.2 — Retur Material
+Form yang sama dengan pengeluaran. Subtipe dipilih sebagai Retur, tambahan field **Alasan Retur** (text area wajib).
+
+---
+
+## MENU 5: 🔄 IN-TRANSIT (PEMINDAHAN ANTAR GUDANG)
+Transaksi ini melibatkan **dua gudang**: gudang pengirim dan penerima.
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🔄 FORMULIR PEMINDAHAN MATERIAL (IN-TRANSIT)                [DRAFT]        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Gudang Asal   : [MDN - Gudang Utama Medan (readonly berdasarkan scope)]   ║
+║  Gudang Tujuan : [BGR - Gudang Utama Bogor ▼] ← Dropdown Gudang Aktif     ║
+║  Tgl Kirim     : [25 Agustus 2026 📅]                                      ║
+║  No. Referensi : [MEMO-INTERNAL-001_______________]                         ║
+║  Upload Surat  : [📎 Upload Surat Pengantar (PDF)] ← *Opsional/Wajib*      ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  DETAIL ITEM YANG DIPINDAHKAN                                               ║
+║  Material        │ Stok di MDN  │ Qty Kirim   │ UOM │ Hapus                ║
+║  ────────────────┼──────────────┼─────────────┼─────┼──────────────────    ║
+║  Valve Gate 4"   │  50 EA       │ [  10  ]    │ EA  │ [🗑️]                 ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  INFO: Material berstatus IN-TRANSIT sampai diterima di gudang tujuan.     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## MENU 6: 🛑 QUARANTINE (PENYISIHAN / WRITE-OFF)
+Membutuhkan upload **Surat Rekapitulasi Usulan dari Pengelola Material (GH OMM)** sebagai dokumen wajib.
+
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🛑 FORMULIR PENYISIHAN MATERIAL (QUARANTINE / WRITE-OFF)      [DRAFT]     ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Subtipe    : [5501 - Penyisihan / Write-Off (Quarantine) ▼]               ║
+║  Gudang     : [MDN - Gudang Utama Medan (readonly)]                         ║
+║  Tgl Usulan : [25 Agustus 2026 📅]                                         ║
+║  Upload Dok : [📎 Surat Rekapitulasi GH OMM (PDF)] ← *WAJIB*              ║
+║  Keterangan : [Alasan penyisihan berdasarkan hasil inventarisasi...]        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  DAFTAR MATERIAL YANG DIUSULKAN UNTUK DISISIHKAN                            ║
+║  Material         │ Stok Tersedia │ Qty Sisihkan │ Alasan      │ Hapus      ║
+║  ─────────────────┼───────────────┼──────────────┼─────────────┼─────────── ║
+║  Pipa Corrosive   │  5 MTR        │ [  5  ]      │ [Korosif ▼] │ [🗑️]       ║
+║  Gasket Expired   │  12 EA        │ [  12 ]      │ [Expired ▼] │ [🗑️]       ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [← Batal]                     [💾 Simpan Draft]  [🚀 Ajukan Approval →]  ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## MENU 7: 📋 STOCK OPNAME & INVENTARISASI
+**Akses:** `@can('stock_opname.create_session')` & `@can('stock_opname.input_count')`
+
+### 7.1 — Manajemen Sesi Stock Opname
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📋 STOCK OPNAME — MANAJEMEN SESI                                           ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  @can('stock_opname.create_session') [➕ Buat Sesi Baru] @endcan            ║
+║  Sesi ID        │ Gudang │ Scope Lokasi │ Tgl Mulai  │ Status    │ Aksi     ║
+║  ───────────────┼────────┼─────────────┼────────────┼───────────┼────────  ║
+║  SO-MDN-202608-1│ MDN    │ RAK-A1      │ 25-08-2026 │ 🟡 Aktif  │ [Input 🔢]║
+║  SO-BGR-202607-2│ BGR    │ Semua       │ 15-07-2026 │ 🟢 Selesai│ [Lihat 👁️]║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+> Klik `[➕ Buat Sesi Baru]` → Modal AJAX memilih Gudang, Scope Lokasi/Rak, dan Tanggal Mulai.
+
+### 7.2 — Form Input Hitung Fisik (Editable Grid)
+Dirancang untuk digunakan di lapangan menggunakan **tablet/iPad**.
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🔢 INPUT HITUNG FISIK — Sesi: SO-MDN-202608-01 │ Gudang: MDN │ RAK-A1    ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Metode Hitung:  [○ Metode 1: Manual Input Grid]  [● Metode 2: Scan QR]    ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  METODE 1 — MANUAL INPUT:                                                  ║
+║  KIMAP    │ Nama Barang         │Qty Sistem│ QTY FISIK  │ SELISIH │ CATATAN ║
+║  ─────────┼─────────────────────┼──────────┼────────────┼─────────┼──────── ║
+║  10001928 │ VALVE GATE 4" SS    │  50 EA   │ [ 50 ] EA  │  0 EA   │ [     ] ║
+║  10002133 │ PIPA SEAMLESS 8"    │  10 MTR  │ [  8 ] MTR │ -2 MTR⚠️│ [Rusak*]║
+║  90001123 │ LAPTOP ASUS ROG     │   2 SET  │ [  2 ] SET │  0 SET  │ [     ] ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  * ⚠️ Jika ada SELISIH, kolom Catatan WAJIB DIISI sebelum bisa disimpan.   ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  METODE 2 — SCAN QR AGGREGASI:                                              ║
+║  [📷 MULAI SCAN QR LABEL BARANG]                                            ║
+║  Token QR yang terbaca: 12 scan │ 3 Material Unik                          ║
+║  [Lihat Rekap Scan ...]         │ Qty dihitung dari jumlah scan per label  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [💾 Simpan Hasil Hitung Fisik]      [@can('stock_opname.approve')]        ║
+║                                      [🚀 Ajukan Approval Sesi] @endcan     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## MENU 8: 📈 REPORTING & ANALYTICS
+**Akses:** `@can('reports.view')` | Export: `@can('reports.export')`
+
+### 8.1 — Laporan Mutasi Stok
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📈 LAPORAN MUTASI STOK                                                     ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Filter:                                                                    ║
+║  Gudang     : [Semua ▼]         Periode: [Aug 2026 ▼]                      ║
+║  Klasifikasi: [MPS ▼]           Material: [Cari KIMAP/Nama...]             ║
+║  [Terapkan Filter]     @can('reports.export') [📥 Export Excel] [📄 PDF] @endcan ║
+╠════════╦══════════════╦═══════╦══════════╦═══════════╦═══════════╦═════════╣
+║ KIMAP  ║ Nama Barang  ║ Gudang║ Saldo    ║ Masuk     ║ Keluar    ║ Saldo   ║
+║        ║              ║       ║ Awal     ║ (Inbound) ║ (Outbound)║ Akhir   ║
+╠════════╬══════════════╬═══════╬══════════╬═══════════╬═══════════╬═════════╣
+║1000192 ║ Valve Gate4" ║ MDN   ║  100 EA  ║  +50 EA   ║  -35 EA   ║  115 EA ║
+║1000213 ║ Pipa SS 8"   ║ MDN   ║   20 MTR ║    0 MTR  ║   -5 MTR  ║   15 MTR║
+╚════════╩══════════════╩═══════╩══════════╩═══════════╩═══════════╩═════════╝
+```
+
+### 8.2 — Laporan Saldo Stok Posisi Gudang
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📋 POSISI STOK GUDANG (Per Tanggal)                                        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Filter: [Gudang: MDN ▼] [Per Tgl: 25-08-2026 📅] [Lokasi: RAK-A1 ▼]     ║
+║  [📥 Export Excel]  [📄 Export PDF]                                         ║
+╠══════════╦════════════════╦═════════╦═══════════╦════════════╦═════════════╣
+║  KIMAP   ║ Nama Barang    ║ Lokasi  ║ On Hand   ║ Reserved   ║ Available   ║
+╠══════════╬════════════════╬═════════╬═══════════╬════════════╬═════════════╣
+║ 10001928 ║ Valve Gate 4"  ║ RAK-A1  ║  115 EA   ║  -10 EA    ║  105 EA    ║
+║ 10002133 ║ Pipa SS 8"     ║ ZONE-B  ║   15 MTR  ║    0 MTR   ║   15 MTR   ║
+╚══════════╩════════════════╩═════════╩═══════════╩════════════╩═════════════╝
+```
+
+### 8.3 — Laporan Rekonsiliasi Penyisihan
+Menampilkan ringkasan material yang masuk kategori penyisihan (SM, PDS, DS) beserta nilai finansialnya.
+
+---
+
+## MENU 9: ⚙️ SETTINGS
+**Akses:** `@can('users.manage')` untuk tab Pengguna; `@can('roles.manage')` untuk tab Roles.
+
+### 9.1 — Manajemen Pengguna & Hak Akses
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  ⚙️  MANAJEMEN PENGGUNA & AKSES                                              ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [Tab: Pengguna ✔] [Tab: Roles & Permissions] [Tab: Audit Log]              ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  [➕ Tambah Pengguna Baru]   [Cari NIP atau Nama................]          ║
+╠════════╦════════════╦════════════════╦═════════════════╦═══════════════════╣
+║  NIP   ║  Nama      ║  Jabatan       ║  Role Spatie    ║  Aksi             ║
+╠════════╬════════════╬════════════════╬═════════════════╬═══════════════════╣
+║ 123456 ║ Saifudin   ║ Staf Logistik  ║ staf_gudang     ║ [✏️] [🔑 Akses]  ║
+║ 234567 ║ Budiman    ║ Kepala Gudang  ║ kepala_gudang   ║ [✏️] [🔑 Akses]  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  ── DRAWER KANAN (Kelola Akses) ──────────────────────────────────────    ║
+║  🔑 KELOLA AKSES: Saifudin (NIP 123456)                                    ║
+║                                                                             ║
+║  1. ROLE SPATIE (Hak Fitur): [staf_gudang ▼]                               ║
+║                                                                             ║
+║  2. SCOPE GUDANG (Hak Data):                                                ║
+║     [☑] MDN - Gudang Utama Medan                                            ║
+║     [☐] BGR - Gudang Utama Bogor                                            ║
+║     [☑] JKT - Gudang Pusat Jakarta                                          ║
+║                                                                             ║
+║  [💾 SIMPAN PERUBAHAN (AJAX)]                                               ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+### 9.2 — Roles & Permissions (Granular Spatie)
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🔐 MANAJEMEN ROLES & PERMISSIONS (Spatie v7)                               ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Role           │ Permissions yang Dimiliki                    │ Aksi       ║
+║  ───────────────┼──────────────────────────────────────────────┼─────────── ║
+║  super_admin    │ Semua Permissions                            │ [✏️ Edit]  ║
+║  kepala_gudang  │ trx.view, trx.approve_warehouse_head, ...   │ [✏️ Edit]  ║
+║  staf_gudang    │ trx.view, trx.check_warehouse, opname...    │ [✏️ Edit]  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  KLIK [✏️ Edit Role] → MODAL MATRIX PERMISSION:                            ║
+║  ┌─────────────────────────────────────────────────────────────────────┐   ║
+║  │ Role: kepala_gudang                                                 │   ║
+║  │ ─────────────────────────────────────────────────────────────────── │   ║
+║  │ Fitur                      │ View │ Create│ Edit │Approve│ Delete   │   ║
+║  │ Master Data                │ [☑]  │ [☐]   │ [☐]  │ [☐]   │ [☐]    │   ║
+║  │ Transactions               │ [☑]  │ [☑]   │ [☑]  │ [☑]   │ [☐]    │   ║
+║  │ Stock Opname               │ [☑]  │ [☑]   │ [☑]  │ [☑]   │ [☐]    │   ║
+║  │ Reports                    │ [☑]  │ [☐]   │ [☐]  │ [☐]   │ [☐]    │   ║
+║  │                                          [💾 Simpan Permissions]   │   ║
+║  └─────────────────────────────────────────────────────────────────────┘   ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+### 9.3 — Audit Log
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  📜 AUDIT LOG SISTEM                                                        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║  Filter: [User ▼] [Modul ▼] [Aksi ▼] [Tgl: 25-08-2026 📅]                ║
+╠════════════╦══════════╦═══════════════╦════════════════╦════════════════════╣
+║ Timestamp  ║ User     ║ Modul/Aksi    ║ Data Lama      ║ Data Baru          ║
+╠════════════╬══════════╬═══════════════╬════════════════╬════════════════════╣
+║ 10:15:32   ║ Budiman  ║ Trx.Approve   ║ status: draft  ║ status: approved   ║
+║ 09:30:11   ║ Saifudin ║ StockOpname   ║ qty_fisik: null║ qty_fisik: 50      ║
+║ 08:00:05   ║ System   ║ Trx.Posted    ║ balance: 100   ║ balance: 115       ║
+╚════════════╩══════════╩═══════════════╩════════════════╩════════════════════╝
+```
+
+---
+
+## MODAL APPROVAL WATERMARK DIGITAL (Shared Component)
+Modal ini dipanggil dari menu mana saja saat pejabat menekan tombol `[Review / Approve]`.
+
+```text
++═════════════════════════════════════════════════════════════════════════════+
+║  🔍 PERSETUJUAN TRANSAKSI: 2202-BGR-202608-0005              [✕ Tutup]      ║
+╠════════════════════════════════╦════════════════════════════════════════════╣
+║  PDF PREVIEW / FORM TRANSAKSI  ║  HISTORI & AKSI APPROVAL                  ║
+║  ┌────────────────────────────┐║  Log:                                      ║
+║  │ PERTAMINA — SURAT          │║  ✅ Draft — Budi S. (25-08 08:00)         ║
+║  │ PENGELUARAN MATERIAL       │║  ✅ CHECKED — Agus (25-08 09:30)          ║
+║  │ No: 2202-BGR-202608-0005   │║  ⏳ Menunggu Ka.Gudang (ANDA)            ║
+║  │ ...                        │║                                            ║
+║  │ [Stempel: CHECKED ✅]      │║  Lampiran Referensi:                       ║
+║  │ [Stempel: APPROVED ⬜]     │║  📎 SPK-2026-876.pdf [👁️ Buka] [📥 Unduh]║
+║  │    (akan diisi jika approve)│║                                            ║
+║  └────────────────────────────┘║  Catatan Penolakan/Revisi:                 ║
+║                                ║  [Textarea: Isi jika Tolak/Revisi...]     ║
+╠════════════════════════════════╩════════════════════════════════════════════╣
+║  @can('transactions.approve_warehouse_head')                                ║
+║  [❌ TOLAK TRANSAKSI]  [🔄 KEMBALIKAN UNTUK REVISI]  [✅ BUBUHKAN APPROVED] ║
+║  @endcan                                                                    ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+*Dokumen ini merupakan referensi visual komprehensif bagi tim Frontend Developer untuk mengimplementasikan antarmuka berbasis Blade, AJAX, DataTables Yajra, Select2, dan Bootstrap 5 yang dikontrol oleh Spatie Laravel-Permission v7.*
