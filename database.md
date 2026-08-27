@@ -76,6 +76,17 @@ erDiagram
 ### 3.1 Domain Identity, Access & Organisasi
 
 #### `2026_01_01_000000_create_permission_tables.php` (Spatie Package Migration v7)
+
+**Kegunaan tabel yang dibuat:**
+
+- `permissions` — katalog izin granular per *guard* untuk mendefinisikan tindakan yang boleh dilakukan di aplikasi, seperti pengelolaan master data, transaksi, stock opname, dan laporan.
+- `roles` — master peran pengguna per *guard* (dan per tim bila fitur *teams* diaktifkan) yang digunakan untuk mengelompokkan sejumlah izin menjadi satu profil akses.
+- `model_has_permissions` — tabel pivot polimorfik untuk memberikan izin secara langsung kepada pengguna atau model lain tanpa harus melalui role.
+- `model_has_roles` — tabel pivot polimorfik untuk menetapkan role kepada pengguna atau model lain; menjadi penghubung utama antara akun dan role Spatie.
+- `role_has_permissions` — tabel pivot yang menentukan kumpulan izin milik setiap role sehingga perubahan hak akses role otomatis berlaku kepada seluruh pemegang role tersebut.
+
+Nama fisik kelima tabel mengikuti konfigurasi `config/permission.php` milik Spatie Laravel Permission.
+
 ```php
 <?php
 
@@ -168,6 +179,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000001_create_users_table.php`
+
+**Kegunaan `users`:** Menyimpan akun dan identitas pegawai untuk autentikasi, pengendalian status akses, serta pencatatan pelaku pada transaksi, approval, posting stok, dan audit. `employee_number` menjadi identitas kepegawaian unik, sedangkan `last_login_at` membantu pemantauan aktivitas akun.
+
 ```php
 <?php
 
@@ -199,6 +213,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000002_create_organizational_functions_table.php`
+
+**Kegunaan `organizational_functions`:** Menyimpan struktur fungsi atau unit organisasi secara hierarkis. Data ini menjadi induk bagi jabatan dan menyediakan konteks organisasi pengguna yang terlibat dalam pengajuan maupun persetujuan transaksi.
+
 ```php
 <?php
 
@@ -227,6 +244,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000003_create_positions_table.php`
+
+**Kegunaan `positions`:** Menyimpan master jabatan pada setiap fungsi organisasi. Jabatan dipakai untuk menempatkan pengguna dalam struktur organisasi dan menjadi sumber informasi jabatan yang dicatat sebagai *snapshot* saat approval.
+
 ```php
 <?php
 
@@ -255,6 +275,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000004_create_user_position_assignments_table.php`
+
+**Kegunaan `user_position_assignments`:** Menyimpan riwayat penugasan jabatan setiap pengguna beserta periode berlaku dan penanda jabatan utama. Pemisahan ini memungkinkan perubahan jabatan tanpa menghapus histori organisasi pengguna.
+
 ```php
 <?php
 
@@ -284,6 +307,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000005_create_warehouses_table.php`
+
+**Kegunaan `warehouses`:** Menyimpan master 17 gudang yang menjadi batas operasional dan akses data aplikasi, lengkap dengan kode, wilayah, alamat, zona waktu, dan status aktif. Tabel ini digunakan sebagai gudang asal/tujuan transaksi dan pemilik saldo persediaan.
+
 ```php
 <?php
 
@@ -314,6 +340,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000006_create_warehouse_locations_table.php`
+
+**Kegunaan `warehouse_locations`:** Menyimpan hierarki lokasi fisik maupun operasional di dalam gudang, seperti zona, rak, bin, area staging, transit, dan karantina. Lokasi ini menunjukkan tempat stok atau label berada dan mendukung proses penempatan, pemindaian QR, transfer, serta stock count.
+
 ```php
 <?php
 
@@ -346,6 +375,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000007_create_user_warehouse_assignments_table.php`
+
+**Kegunaan `user_warehouse_assignments`:** Menetapkan gudang yang boleh diakses pengguna, peran operasionalnya pada gudang tersebut, dan periode berlakunya. Tabel ini menjadi dasar *warehouse-scoped access* agar pengguna hanya dapat melihat atau memproses data gudang sesuai penugasan.
+
 ```php
 <?php
 
@@ -382,6 +414,9 @@ return new class extends Migration {
 ### 3.2 Domain Bank Data Master Material
 
 #### `2026_01_01_000010_create_material_classifications_table.php`
+
+**Kegunaan `material_classifications`:** Menyimpan master klasifikasi tingkat tinggi material untuk pengelompokan bisnis, pengurutan tampilan, penyaringan transaksi, serta analitik komposisi persediaan pada laporan dan dashboard.
+
 ```php
 <?php
 
@@ -410,6 +445,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000011_create_material_categories_table.php`
+
+**Kegunaan `material_categories`:** Menyimpan master kategori material yang melengkapi klasifikasi utama. Kategori membantu pencarian, validasi master material, pengelompokan laporan, dan analisis persediaan secara lebih rinci.
+
 ```php
 <?php
 
@@ -438,6 +476,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000012_create_uoms_table.php`
+
+**Kegunaan `uoms`:** Menyimpan master satuan ukur (*unit of measure*) yang digunakan oleh material dan item transaksi. Presisi desimal pada tabel ini menentukan ketelitian kuantitas yang sah untuk masing-masing satuan.
+
 ```php
 <?php
 
@@ -466,6 +507,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000013_create_materials_table.php`
+
+**Kegunaan `materials`:** Menjadi master utama identitas material berdasarkan KIMAP unik, nama, klasifikasi, kategori, satuan dasar, deskripsi, dan karakter serialisasi. Seluruh transaksi, lot, saldo, serta stock count merujuk ke tabel ini agar identitas material konsisten.
+
 ```php
 <?php
 
@@ -498,6 +542,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000014_create_material_status_assignments_table.php`
+
+**Kegunaan `material_status_assignments`:** Menyimpan riwayat status material per gudang—FM, SM, PDS, atau DS—beserta masa efektif, alasan, dan petugas yang menetapkan. Riwayat ini memungkinkan status berbeda antar gudang dan menjaga perubahan status tetap dapat diaudit.
+
 ```php
 <?php
 
@@ -533,6 +580,9 @@ return new class extends Migration {
 ### 3.3 Domain Inventory Core & Ledger Stok
 
 #### `2026_01_01_000020_create_stock_lots_table.php`
+
+**Kegunaan `stock_lots`:** Menyimpan batch atau lapisan perolehan material pada suatu gudang, termasuk periode akuisisi, sumber penerimaan, harga satuan, kuantitas awal, kuantitas tersisa, dan status siklus hidup lot. Data lot menjadi dasar pelacakan asal stok dan penilaian harga saat stok dikeluarkan atau dipindahkan.
+
 ```php
 <?php
 
@@ -565,6 +615,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000021_create_stock_labels_table.php`
+
+**Kegunaan `stock_labels`:** Menyimpan kartu atau label fisik ber-QR yang mewakili sebagian atau seluruh kuantitas suatu lot pada lokasi gudang. Tabel ini mencatat token QR, nomor kartu, sisa kuantitas, frekuensi cetak, waktu cetak terakhir, dan status label untuk mendukung scan serta pengendalian cetak ulang.
+
 ```php
 <?php
 
@@ -598,6 +651,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000022_create_inventory_movements_table.php`
+
+**Kegunaan `inventory_movements`:** Menjadi *ledger* stok dan nilai yang bersifat *append-only* serta sumber kebenaran seluruh mutasi persediaan. Setiap posting mencatat delta kuantitas/nilai per transaksi, item, gudang, lokasi, material, lot, dan label; koreksi dilakukan melalui reversal atau adjustment baru, bukan dengan mengubah catatan lama.
+
 ```php
 <?php
 
@@ -637,6 +693,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000023_create_stock_balances_table.php`
+
+**Kegunaan `stock_balances`:** Menyimpan proyeksi saldo terkini per kombinasi gudang–lokasi–material–lot untuk pembacaan cepat. Tabel ini memisahkan kuantitas *on hand*, direservasi, dalam perjalanan, dan dikarantina serta biaya rata-rata; nilainya diperbarui saat posting dan harus dapat direkonsiliasi kembali ke `inventory_movements`.
+
 ```php
 <?php
 
@@ -672,6 +731,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000024_create_stock_reservations_table.php`
+
+**Kegunaan `stock_reservations`:** Mengalokasikan sementara kuantitas dari lot tertentu kepada item transaksi pengeluaran atau transfer selama workflow berjalan. Reservasi mencegah stok yang sama dijanjikan dua kali, lalu akan dipenuhi, dilepas, atau kedaluwarsa sesuai hasil transaksi.
+
 ```php
 <?php
 
@@ -706,6 +768,9 @@ return new class extends Migration {
 ### 3.4 Domain Transaksi Material & Workflow
 
 #### `2026_01_01_000030_create_transaction_subtypes_table.php`
+
+**Kegunaan `transaction_subtypes`:** Menyimpan master kode subjenis transaksi, tipe transaksi utamanya, nama, keterangan, kebutuhan referensi, dan status aktif. Tabel ini menerjemahkan kode bisnis seperti 1101 atau 2201 menjadi aturan proses yang konsisten tanpa menanamkannya langsung di setiap transaksi.
+
 ```php
 <?php
 
@@ -736,6 +801,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000031_create_inventory_transactions_table.php`
+
+**Kegunaan `inventory_transactions`:** Menyimpan header dokumen untuk seluruh proses penerimaan, pengeluaran, pengembalian, pemindahan, penyisihan, dan adjustment. Tabel ini mengendalikan nomor transaksi, gudang asal/tujuan, status serta tahap workflow, pengaju, waktu proses, dan `lock_version` untuk mencegah perubahan bersamaan yang saling menimpa.
+
 ```php
 <?php
 
@@ -779,6 +847,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000032_create_inventory_transaction_items_table.php`
+
+**Kegunaan `inventory_transaction_items`:** Menyimpan rincian baris material pada setiap transaksi, termasuk kuantitas diminta dan diproses, harga/nilai, satuan, lokasi asal/tujuan, lot, label QR, nomor kartu, serta catatan. Baris inilah yang menjadi dasar reservasi dan pembentukan mutasi stok saat transaksi diposting.
+
 ```php
 <?php
 
@@ -820,6 +891,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000033_create_transaction_documents_table.php`
+
+**Kegunaan `transaction_documents`:** Menyimpan metadata dan versi lampiran transaksi—misalnya PO, DO, BAP, BAST, nota dinas, SPK, atau surat jalan—sementara file fisiknya tetap berada di object storage privat. `object_key`, MIME type, ukuran, checksum, pengunggah, dan waktu unggah mendukung validasi, audit, serta unduhan melalui otorisasi.
+
 ```php
 <?php
 
@@ -855,6 +929,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000034_create_transaction_approvals_table.php`
+
+**Kegunaan `transaction_approvals`:** Menyimpan urutan tahapan pemeriksaan/persetujuan, role yang berwenang, pengguna yang ditugaskan, keputusan, catatan, dan waktu keputusan untuk setiap transaksi. Snapshot nama, jabatan, role, data teknis, serta stempel `CHECKED`/`APPROVED` menjaga bukti approval tetap utuh walaupun profil pengguna kemudian berubah.
+
 ```php
 <?php
 
@@ -894,6 +971,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000035_create_transaction_histories_table.php`
+
+**Kegunaan `transaction_histories`:** Menjadi linimasa audit aktivitas dan perpindahan status transaksi. Setiap entri merekam aktivitas, status sebelum/sesudah, metadata tambahan, pelaku, dan waktu kejadian sehingga alur revisi, penolakan, approval, posting, atau pembatalan dapat ditelusuri.
+
 ```php
 <?php
 
@@ -929,6 +1009,9 @@ return new class extends Migration {
 ### 3.5 Domain Stock Opname & Inventarisasi
 
 #### `2026_01_01_000040_create_stock_count_sessions_table.php`
+
+**Kegunaan `stock_count_sessions`:** Menyimpan header sesi stock opname atau inventarisasi per gudang, termasuk periode, waktu snapshot saldo, ruang lingkup, status, pembuat, dan penyetuju. Sesi ini membekukan konteks pembanding sebelum hasil hitung fisik dicatat.
+
 ```php
 <?php
 
@@ -963,6 +1046,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000041_create_stock_count_items_table.php`
+
+**Kegunaan `stock_count_items`:** Menyimpan hasil hitung fisik setiap material/lot/label dalam suatu sesi, baik melalui input manual maupun pemindaian QR. Tabel ini membandingkan kuantitas sistem dengan kuantitas fisik, menghitung selisih, mewajibkan penjelasan saat berselisih, dan menyimpan bukti petugas serta token QR yang dipindai.
+
 ```php
 <?php
 
@@ -999,6 +1085,9 @@ return new class extends Migration {
 ```
 
 #### `2026_01_01_000042_create_inventory_adjustments_table.php`
+
+**Kegunaan `inventory_adjustments`:** Menyimpan proses koreksi persediaan yang berasal dari selisih stock opname atau inventarisasi. Selisih tidak langsung mengubah saldo; alasan dan persetujuan Kepala Gudang serta Fungsi Persediaan harus diselesaikan sebelum adjustment diposting sebagai mutasi baru ke ledger.
+
 ```php
 <?php
 
