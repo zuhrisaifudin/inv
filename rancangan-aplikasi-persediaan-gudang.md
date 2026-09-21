@@ -1,1414 +1,1291 @@
-# Rancangan Aplikasi Pengelolaan Persediaan Material dan Gudang
+# Rancangan Aplikasi DIGIO Inventory
 
-**Versi:** 1.0  
-**Tanggal:** 24 Agustus 2026  
-**Basis kebutuhan:** `Detail.xlsx` (Mencakup 3 Tab: `DETAIL`, `MODUL`, dan `PROSES`)  
-**Target teknologi:** Laravel 12 Modular Monolith  
-**Status dokumen:** Baseline rancangan untuk review bisnis dan teknis
+**Sistem Pengelolaan Persediaan Material dan Gudang**
 
----
+| Atribut | Nilai |
+|---|---|
+| Nama aplikasi | DIGIO Inventory |
+| Versi dokumen | 2.0 |
+| Tanggal | 21 September 2026 |
+| Status | Baseline rancangan untuk implementasi |
+| Sumber bisnis | `Proses Aplikasi Inventory.pdf`, `Detail.xlsx` (tab DETAIL, MODUL, PROSES, Sheet1) |
+| Target teknologi | Laravel 12 Modular Monolith, PostgreSQL 16 / MySQL 8.0+, Redis 7 |
+| Cakupan operasional | 17 lokasi gudang |
 
-## 1. Ringkasan Eksekutif
-
-Aplikasi ini dirancang sebagai pusat pengelolaan persediaan material dan aktivitas gudang untuk 17 lokasi gudang. Sistem menangani seluruh siklus material, mulai dari penerimaan, pengeluaran, pengembalian, pemindahan antar gudang, penyisihan, stock opname, inventarisasi, pencetakan QR Code, hingga pelaporan dan dashboard manajemen.
-
-Rancangan menggunakan **Laravel 12 Modular Monolith** agar pengembangan awal tetap cepat dan sederhana, tetapi batas antarmodul tetap jelas. Sistem stok menggunakan **immutable inventory ledger** sebagai sumber kebenaran, ditambah tabel saldo untuk pembacaan cepat. Setiap perubahan stok hanya boleh terjadi melalui transaksi database yang tervalidasi, tercatat dalam audit log, dan mengikuti workflow persetujuan.
-
-Output utama sistem:
-
-- Data persediaan material yang konsisten antara fungsi persediaan dan gudang.
-- Workflow approval yang dapat ditelusuri untuk setiap transaksi.
-- Pemantauan saldo, mutasi, nilai persediaan, dan material dalam perjalanan.
-- Identifikasi material menggunakan QR Code.
-- Stock opname dan inventarisasi yang terdokumentasi.
-- Laporan operasional dan dashboard manajemen.
-- Jejak audit lengkap untuk perubahan data dan keputusan approval.
-
-## 2. Tujuan Sistem
-
-### 2.1 Tujuan Bisnis
-
-1. Menstandarkan proses pengelolaan material pada seluruh gudang.
-2. Mengurangi pencatatan manual dan perbedaan saldo antarfungsi.
-3. Memastikan setiap transaksi memiliki dokumen, pemeriksaan, dan approval yang sesuai.
-4. Menyediakan posisi stok dan nilai persediaan secara cepat dan dapat diaudit.
-5. Mempercepat identifikasi, pemindahan, stock opname, dan inventarisasi menggunakan QR Code.
-6. Menyediakan informasi untuk fungsi operasional, accounting, dan management.
-
-### 2.2 Indikator Keberhasilan
-
-- Tidak ada stok negatif akibat transaksi aplikasi.
-- Setiap perubahan kuantitas memiliki movement ledger dan histori approval.
-- Seluruh transaksi dapat ditelusuri dari nomor transaksi ke dokumen, material, gudang, pengguna, dan jurnal stok.
-- Saldo laporan dapat direkonsiliasi dengan ledger.
-- Transaksi serentak tidak menghasilkan double posting atau saldo ganda.
-- Laporan dapat difilter berdasarkan gudang, periode, klasifikasi, kategori, status, material, dan jenis transaksi.
-- Hak akses pengguna selalu dibatasi berdasarkan peran dan gudang yang ditugaskan.
-
-## 3. Asumsi dan Keputusan Desain
-
-Dokumen ini menggunakan keputusan baseline berikut agar rancangan dapat langsung diterjemahkan menjadi implementation plan:
-
-1. Sistem merupakan aplikasi internal berbasis web.
-2. Fase pertama berjalan standalone dengan impor/ekspor Excel; integrasi SSO dan ERP disiapkan melalui service interface dan API.
-3. Database utama menggunakan PostgreSQL 16. MySQL 8 dapat digunakan dengan penyesuaian kecil jika menjadi standar infrastruktur perusahaan.
-4. Metode valuasi baseline adalah **moving weighted average**. Jika kebijakan accounting perusahaan menetapkan metode lain, valuation service menjadi satu-satunya komponen yang diganti.
-5. Kuantitas dan harga disimpan sebagai nilai numerik desimal, bukan freetext.
-6. Satu material memiliki satu UOM dasar pada fase pertama. Konversi multi-UOM menjadi pengembangan lanjutan.
-7. QR Code menyimpan token acak/UUID, bukan seluruh data material. Data terbaru ditampilkan setelah token diverifikasi oleh server.
-8. Workflow didefinisikan sebagai state machine per jenis transaksi di source code, sedangkan pelaku, keputusan, catatan, dan waktunya disimpan di database.
-9. Inventory ledger bersifat append-only. Kesalahan posting diperbaiki melalui reversal atau adjustment yang disetujui, bukan mengubah movement lama.
-10. Status material Fast Moving, Slow Moving, Potential Dead Stock, dan Dead Stock dikelola oleh Fungsi Persediaan dengan tanggal berlaku. Otomatisasi berbasis umur atau frekuensi transaksi dapat ditambahkan setelah rumus bisnis disahkan.
-
-## 4. Ruang Lingkup
-
-### 4.1 Termasuk dalam Fase Implementasi Utama
-
-- Autentikasi, pengguna, peran, permission, dan pembatasan per gudang.
-- Bank data/master data.
-- Master material, klasifikasi, kategori, KIMAP, UOM, dan status material.
-- Gudang dan lokasi penyimpanan.
-- Saldo stok, lot/perolehan, kartu material, reservation, dan inventory ledger.
-- Penerimaan material.
-- Pengeluaran material.
-- Pengembalian material.
-- Pemindahan material antar gudang.
-- Penyisihan material.
-- Stock opname.
-- Inventarisasi.
-- QR Code dan pencetakan label.
-- Dokumen transaksi.
-- Workflow approval/reject/revision.
-- Notifikasi dalam aplikasi dan email opsional.
-- Laporan dan ekspor.
-- Dashboard.
-- Audit log dan monitoring aktivitas.
-
-### 4.2 Tidak Termasuk dalam Baseline
-
-- Pembelian/procurement dan pembuatan PO.
-- General ledger accounting lengkap.
-- Pengelolaan vendor secara menyeluruh.
-- Optimasi rute pengiriman.
-- Aplikasi mobile native.
-- Integrasi otomatis dengan SAP/ERP sebelum kontrak API tersedia.
-- Konversi multi-UOM dan serialisasi unit kompleks.
-
-## 5. Aktor dan Hak Akses
-
-### 5.1 Daftar Peran
-
-| Peran | Tanggung jawab utama | Cakupan data |
-|---|---|---|
-| Admin Pengguna/User | Mengelola akun dan penugasan fungsi pengguna | Sesuai organisasi yang dikelola |
-| Pejabat Pengguna/User | Mengajukan dan menyetujui transaksi dari fungsi pengguna | Gudang/region yang ditugaskan |
-| Fungsi Persediaan | Verifikasi transaksi, harga, nilai, dan laporan persediaan | Region yang ditugaskan |
-| Staf Gudang | Pemeriksaan fisik, scan QR, lokasi, nomor kartu, dan pencetakan | Gudang yang ditugaskan |
-| Kepala Gudang | Approval operasional gudang | Gudang yang dipimpin |
-| Pengelola/Holder | Mengelola kepemilikan material dan usulan penyisihan | Organisasi/material terkait |
-| Accounting | Review laporan nilai dan rekonsiliasi | Region atau seluruh perusahaan |
-| Management | Melihat dashboard dan laporan agregat | Read-only sesuai kewenangan |
-| Tim Inventarisasi | Melaksanakan sesi inventarisasi | Sesi dan gudang yang ditugaskan |
-| Super Admin | Konfigurasi global, master data, dan dukungan sistem | Seluruh data |
-
-### 5.2 Matriks Akses Ringkas
-
-Keterangan: `C` membuat, `R` melihat, `U` memproses, `A` menyetujui, `M` mengelola.
-
-| Modul | User | Persediaan | Staf Gudang | Kepala Gudang | Holder | Accounting | Management | Super Admin |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Penerimaan | C/R | R/U/A | R/U | R/A | R | R | R | M |
-| Pengeluaran | C/R | R/U/A | R/U | R/A | R | R | R | M |
-| Pengembalian | C/R | R/U/A | R/U | R/A | R | R | R | M |
-| Pemindahan | C/R | R/U/A | R/U | R/A | R | R | R | M |
-| Penyisihan | C/R | R/U/A | R/U | R/A | C/R | R | R | M |
-| Stock Opname | R | R | C/U | A | R | R | R | M |
-| Inventarisasi | R | R | R | A | R | R | R | M |
-| Laporan | R | R | R | R | R | R | R | M |
-| Dashboard | R | R | R | R | R | R | R | M |
-| Bank Data | R | R | R | R | R | R | R | M |
-
-Implementasi otorisasi dan permission menggunakan **Spatie Laravel-Permission v7** yang dipadukan dengan **Laravel Authorization Policy** dan **Warehouse Scoping Middleware**.
-
-Otorisasi sistem bekerja pada 2 tingkatan:
-1. **Tingkat Peran & Permission (Spatie RBAC)**: Membatasi aksi/fitur yang boleh dilakukan pengguna (`transactions.create`, `transactions.check_warehouse`, `transactions.approve_warehouse_head`, `transactions.verify_inventory`, `transactions.post`, dll).
-2. **Tingkat Cakupan Gudang (Warehouse Policy Scope)**: Membatasi data fisik gudang yang dapat diakses oleh pengguna sesuai penugasan di `user_warehouse_assignments`.
-
-## 6. Arsitektur Aplikasi
-
-### 6.1 Pendekatan
-
-Sistem menggunakan modular monolith. Seluruh modul berjalan dalam satu deployment Laravel, tetapi business logic dipisahkan berdasarkan domain agar mudah diuji dan dapat diekstrak menjadi service terpisah jika skala meningkat.
-
-```mermaid
-flowchart TB
-    UI["Web UI / PWA"] --> APP["Laravel 12 Application"]
-    APP --> ID["Identity & Access (Spatie Permission v7)"]
-    APP --> MD["Master Data"]
-    APP --> TX["Inventory Transactions"]
-    APP --> WF["Workflow & Approval"]
-    APP --> RP["Reporting & Dashboard"]
-    TX --> DB[(PostgreSQL)]
-    WF --> Q["Redis Queue"]
-    RP --> DB
-    APP --> OBJ["S3-compatible Document Storage"]
-    Q --> NT["Notification Channels"]
-```
-
-### 6.2 Komponen Teknologi
-
-| Komponen | Pilihan baseline | Fungsi |
-|---|---|---|
-| Backend | PHP 8.3+ dan Laravel 12 | Business logic, Web Controller, DataTables Service, Queue, Scheduler |
-| Frontend | Blade, jQuery, AJAX, DataTables (Yajra), Bootstrap 5 / Tailwind | UI internal dengan server-side DataTables, filter dinamis, dan AJAX modal form |
-| DataTables Engine | Yajra Laravel DataTables 11+ | Server-side processing, pagination, multi-column search, export PDF/XLSX |
-| Database | PostgreSQL 16 / MySQL 8.0 | Transaksi, constraint, locking, analytics reporting |
-| Cache/Queue | Redis 7 | Queue DataTables export, cache saldo, distributed lock |
-| File storage | S3-compatible storage | Dokumen transaksi privat dan hasil ekspor PDF/XLSX |
-| Web server | Nginx dan PHP-FPM | Runtime aplikasi |
-| Authentication | Laravel Fortify/Sanctum | Login lokal, session security, dan API token |
-| Authorization | Spatie Laravel-Permission v7 + Laravel Policy | Role & Permission RBAC dengan scope gudang |
-| QR | Server-side QR generator | Label QR dan scan token endpoint |
-| Monitoring | Laravel log, queue monitor, health check | Observability dan operasi |
-
-### 6.3 Design Pattern Arsitektur Laravel 12
-
-Aplikasi ini menggabungkan **6 Design Pattern Modern** pada framework Laravel 12 untuk mendukung pengkodean yang rapi, terisolasi, aman, serta siap menangani transaksi **AJAX** dan **DataTables Server-Side**:
-
-1. **Modular Monolith / Domain-Driven Design (DDD) Light Pattern**:
-   - Logika bisnis utama dikelompokkan ke dalam **Domain Modules** (`app/Domain/Transactions`, `app/Domain/Inventory`, `app/Domain/MasterData`, `app/Domain/Reporting`).
-   - Mencegah *tight coupling* antara HTTP Controllers dengan aturan bisnis persediaan, sehingga aplikasi mudah di-maintain dan diuji.
-
-2. **Action / Single Responsibility Principle (SRP) Pattern**:
-   - Setiap penggunaan fungsi bisnis (*use case*) dibungkus dalam satu **Class Action** khusus (misal: `CreateReceiptTransactionAction`, `ProcessInTransitTransferAction`, `CountPhysicalStockAction`, `PostWriteOffAction`).
-   - Controller tetap ramping (*Thin Controller, Fat Action/Domain*).
-
-3. **DataTables Server-Side Processing Pattern (Yajra DataTable Service)**:
-   - Logika penyiapan tabel (*querying*, *sorting*, *filtering*, *badge rendering*, *action buttons*) dipisahkan ke dalam **Class DataTable** (`app/DataTables/TransactionDataTable.php`, `StockBalanceDataTable.php`).
-   - Mendukung pencarian berkecepatan tinggi, pagination server-side, dan ekspor data tanpa membebani memori browser.
-
-4. **AJAX Controller & Standardized JSON Response Pattern**:
-   - Seluruh interaksi modal, pembuatan draft, upload dokumen, serta keputusan approval (*Approve*/*Reject*/*Revision*) diproses via **AJAX POST/PATCH**.
-   - Controller mengembalikan format JSON standar (`{ success: true, message: "...", data: {...} }`), lalu frontend memperbarui tampilan secara otomatis via `table.ajax.reload(null, false)`.
-
-5. **Immutable Ledger & Balance Projection (CQRS Light) Pattern**:
-   - **Write Model**: Setiap transaksi mutasi fisik/keuangan hanya ditulis *append-only* di `inventory_movements`.
-   - **Read Model**: Tampilan saldo cepat membaca `stock_balances` (Projection Cache), dan dashboard membaca `vw_dashboard_inventory_composition` (Analytics View).
-
-6. **Policy & Query Scope Authorization Pattern**:
-   - Keamanan tingkat gudang dijamin via `WarehousePolicy` dan **Query Scope**, di mana kueri Eloquent/DataTables secara otomatis memfilter `$query->whereIn('source_warehouse_id', $userWarehouseIds)`.
+Dokumen ini merombak rancangan sebelumnya agar **selaras dengan alur operasional PDF**, **memetakan seluruh kolom data Excel**, dan **siap diimplementasikan** oleh tim developer. Setiap aturan bisnis yang berbeda antara sumber dicatat sebagai keputusan desain yang tegas.
 
 ---
 
-### 6.4 Struktur Folder Proyek Laravel 12
+## Daftar Isi
+
+1. [Tujuan & Lingkup Sistem](#1-tujuan--lingkup-sistem)
+2. [Alur Proses Bisnis (Workflow)](#2-alur-proses-bisnis-workflow)
+3. [Struktur Database & Mapping Data](#3-struktur-database--mapping-data-sesuai-detaillxlsx)
+4. [Spesifikasi Modul & Fitur Aplikasi](#4-spesifikasi-modul--fitur-aplikasi)
+5. [Kebutuhan Non-Fungsional](#5-kebutuhan-non-fungsional)
+
+---
+
+## 1. Tujuan & Lingkup Sistem
+
+### 1.1 Ringkasan Tujuan
+
+DIGIO Inventory adalah sistem web internal untuk menstandarkan siklus hidup material di 17 gudang: penerimaan, putaway ke zona/rak/bin, pengeluaran (picking–packing–FIFO/FEFO), pemindahan antar gudang, pengembalian, penyisihan, stock opname, inventarisasi, identifikasi QR/Barcode, pelaporan, dan dashboard manajemen.
+
+Sistem memisahkan **dua buku stok** sesuai alur resmi:
+
+| Buku | Nama laporan | Diposting saat | PIC |
+|---|---|---|---|
+| **Buku Gudang** | Laporan Stok Gudang | Approval Kepala Gudang | Operasional gudang |
+| **Buku Persediaan** | Laporan Persediaan Material | Approval Fungsi Persediaan | Pengendalian nilai & klasifikasi |
+
+Setiap perubahan kuantitas atau nilai hanya boleh terjadi melalui **immutable inventory ledger**. Saldo tampilan (`stock_balances` / `inventory_book_balances`) adalah proyeksi yang wajib dapat direkonsiliasi ke ledger.
+
+### 1.2 Tujuan Bisnis
+
+1. Menyatukan pencatatan persediaan dan gudang agar saldo, nomor kartu, lokasi, dan nilai tidak berbeda antarfungsi.
+2. Menjamin setiap transaksi memiliki dokumen, pemeriksaan fisik, dan jejak approval (stempel digital `CHECKED` / `APPROVED` / `QR Passed`).
+3. Mempercepat identifikasi material dengan QR Code + Barcode, termasuk cetak label dan scan pada picking/opname.
+4. Menyediakan posisi stok, kartu stok (stock card), mutasi, dan nilai persediaan yang dapat diaudit.
+5. Memberi peringatan dini stok rendah, material kedaluwarsa, dead stock, dan transfer yang tertahan in-transit.
+6. Membatasi akses berdasarkan peran dan gudang yang ditugaskan (RBAC + warehouse scope).
+
+### 1.3 Indikator Keberhasilan
+
+- Tidak ada stok negatif pada kedua buku.
+- Setiap delta kuantitas/nilai tertelusur ke nomor transaksi, item, lot, kartu, gudang, pengguna, dan keputusan approval.
+- Permintaan keluar tidak melebihi *available quantity*.
+- Picking mengikuti FIFO (periode perolehan tertua) atau FEFO (kedaluwarsa terdekat) kecuali ada override beralasan.
+- Laporan Persediaan dan Laporan Stok Gudang dapat direkonsiliasi ke ledger masing-masing.
+- Pengguna hanya melihat gudang yang ditugaskan.
+
+### 1.4 Lingkup Fungsional (In Scope)
+
+| Area | Cakupan |
+|---|---|
+| IAM | Login, peran, permission, penugasan gudang, audit login |
+| Bank Data | Fungsi/jabatan/PIC, 17 gudang, zona/rak/bin, jenis transaksi, klasifikasi, kategori, KIMAP, UOM, status material, alasan penghapusan, kondisi material |
+| Inbound | Penerimaan 1101, 1103, 1104, 1107 + putaway lokasi |
+| Outbound | Pengeluaran 2201, 2202, 2203, 2205, 2206 + picking FIFO/FEFO + packing + surat jalan |
+| Return | Pengembalian 1102, 1105, 1106 |
+| Transfer | Pemindahan antar gudang 2204 keluar / 1104 masuk, status in-transit |
+| Write-off | Usulan penghapusan + penyisihan 3300 (produktif → non-produktif) |
+| Warehouse | Zoning/bin, kartu material, QR/Barcode, cetak label |
+| Count | Stock opname berkala dan inventarisasi + adjustment |
+| Planning | Rencana Kebutuhan Material (RKM) |
+| Reporting | Stock card, laporan harian/bulanan, rekap, ekspor Excel/PDF |
+| Dashboard | Komposisi nilai, transaksi, tingkat persediaan, alert real-time |
+
+### 1.5 Di Luar Lingkup Baseline
+
+- Pembuatan Purchase Order / kontrak pengadaan (RKM menghasilkan usulan PR, bukan PO).
+- General ledger akuntansi penuh (hanya nilai persediaan dan nilai buku pada usulan penghapusan).
+- Aplikasi mobile native (scan memakai web/PWA + kamera).
+- Integrasi otomatis SAP/ERP sebelum kontrak API tersedia.
+- Multi-UOM dan serialisasi unit kompleks (fase 1: satu UOM dasar per KIMAP).
+
+### 1.6 Target Pengguna — Role-Based Access Control
+
+Otorisasi bertingkat dua:
+
+1. **Peran & permission (Spatie Laravel-Permission v7)** — membatasi aksi.
+2. **Warehouse Policy Scope** — membatasi data gudang lewat `user_warehouse_assignments`.
+
+#### 1.6.1 Katalog Peran
+
+| Kode peran | Nama | Lokasi kerja | Tanggung jawab utama |
+|---|---|---|---|
+| `admin_user` | Admin Pengguna/User | Organisasi | Mengelola akun dan penugasan fungsi |
+| `pejabat_user` | Pejabat Pengguna/User | OMM Region | Mengajukan dan menyetujui transaksi pengguna |
+| `persediaan` | Fungsi Persediaan | OMM Region | Reviu harga/nilai/klasifikasi, posting Buku Persediaan |
+| `staf_gudang` | Staf Gudang | Gudang (eksternal) | Pemeriksaan fisik, nomor kartu, lokasi, scan QR, picking, cetak label |
+| `kepala_gudang` | Kepala Gudang | Gudang (eksternal) | Approval operasional; posting Buku Gudang |
+| `holder_material` | Pengelola/Holder (GH OMM) | Kantor Pusat | Usulan penghapusan, surat rekapitulasi, instruksi penyisihan |
+| `accounting` | Accounting | Kantor Pusat | Nilai perolehan/nilai buku pada usulan penghapusan; reviu laporan nilai |
+| `management` | Management | Kantor Pusat | Dashboard dan laporan agregat (read-only) |
+| `tim_inventarisasi` | Tim Inventarisasi | Kantor Pusat / gudang | Pelaksanaan inventarisasi fisik |
+| `super_admin` | Super Admin | Global | Bank data, konfigurasi, dukungan sistem |
+
+#### 1.6.2 Matriks Akses Modul
+
+Keterangan: `C` create, `R` read, `U` process/update, `A` approve, `S` submit/check, `M` manage.
+
+| Modul | User | Persediaan | Staf Gudang | Kepala Gudang | Holder | Accounting | Management | Tim Inv. | Super Admin |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Penerimaan | C/R/A | R/A | R/U/S | R/A | R | R | R | — | M |
+| Pengeluaran | C/R/A | R/A | R/U/S | R/A | R | R | R | — | M |
+| Pengembalian | C/R/A | R/A | R/U/S | R/A | R | R | R | — | M |
+| Pemindahan | C/R/A | R/A | R/U/S | R/A | R | R | R | — | M |
+| Penyisihan | C/R/A | R/A | R/U/S | R/A | C/R/A | R | R | — | M |
+| Usulan Penghapusan | C/R/A | R | R | R | R/A | R/U/A | R | — | M |
+| RKM | C/R/A | R | R | R | R | R | R | — | M |
+| Stock Opname | R | R | C/U/A | A | R | R | R | — | M |
+| Inventarisasi | R | R | R | A | R | R | R | C/U/A | M |
+| QR / Label | R | R | C/U | R | R | R | R | R | M |
+| Laporan | R | R | R | R | R | R | R | R | M |
+| Dashboard | R | R | R | R | R | R | R | R | M |
+| Bank Data | R | R | R | R | R | R | R | R | M |
+
+Permission granular yang wajib di-seed:
 
 ```text
-app/
-├── DataTables/                      # Class DataTables Yajra Server-Side (Pattern 3)
-│   ├── MaterialDataTable.php
-│   ├── StockBalanceDataTable.php
-│   ├── TransactionDataTable.php
-│   ├── StockOpnameDataTable.php
-│   └── AuditLogDataTable.php
-├── Domain/                          # Core Domain Logic & Action Classes (Pattern 1 & 2)
-│   ├── Identity/
-│   │   ├── Models/
-│   │   └── Services/
-│   ├── MasterData/
-│   │   ├── Actions/
-│   │   └── Models/
-│   ├── Inventory/
-│   │   ├── Services/               # Ledger Engine, Reservation, Valuation
-│   │   └── Models/
-│   ├── Transactions/
-│   │   ├── Receipt/                # Inbound (1101-1107)
-│   │   ├── Issue/                  # Outbound (2201-2206)
-│   │   ├── ReturnMaterial/         # Retur Transaksi
-│   │   ├── Transfer/               # Pemindahan Antar Gudang
-│   │   └── WriteOff/               # Penyisihan Material
-│   ├── WarehouseOperations/        # QR Code Scan, Stock Opname, Inventarisasi
-│   └── Reporting/                  # Query Analytics & Export Services
-├── Http/
-│   ├── Controllers/                 # Thin Controllers untuk AJAX Response (Pattern 4)
-│   │   ├── Admin/                  # Controller Master Data & User
-│   │   ├── Transaction/            # Controller Form, Approval & AJAX Process
-│   │   ├── Warehouse/              # Controller Posisi Stok & QR Scan
-│   │   └── Report/                 # Controller Laporan & Dashboard Analytics
-│   ├── Requests/                   # FormRequest Validation (AJAX & Web)
-│   └── Middleware/                 # WarehouseScopeMiddleware, SecurityHeader
-├── Models/                          # Eloquent Models & Relationships
-├── Policies/                        # Authorization Policies per Gudang (Pattern 6)
-├── Services/                        # PdfWatermarkGenerator, QrCodeService
-└── Support/
-
-resources/
-├── views/
-│   ├── layouts/
-│   │   └── app.blade.php           # Layout utama (Bootstrap + DataTables CSS/JS)
-│   ├── datatables/                 # Custom Action Buttons & Badge Templates
-│   │   ├── transaction_actions.blade.php
-│   │   └── status_badge.blade.php
-│   ├── pages/
-│   │   ├── transactions/           # Halaman List (DataTables) & Modals (AJAX)
-│   │   ├── stock_balances/
-│   │   ├── stock_opname/
-│   │   └── reports/
-│   └── pdf/                        # Template Cetak PDF Form + Watermark Digital
-routes/
-├── web.php                         # Route Web & AJAX DataTables Endpoints
-└── api.php                         # API Endpoint Scanner QR Code
+master_data.view | master_data.create | master_data.edit | master_data.delete
+transactions.view | transactions.create | transactions.submit
+transactions.check_warehouse | transactions.approve_warehouse_head
+transactions.verify_inventory | transactions.post | transactions.cancel | transactions.reverse
+stock_opname.create_session | stock_opname.input_count | stock_opname.approve
+labels.print | labels.reprint | qr.scan
+reports.view | reports.export
+dashboard.view_assigned_warehouse | dashboard.view_all_warehouses
+alerts.manage_threshold
+users.manage | roles.manage
+audit.view
 ```
 
-### 6.5 Pola Interaksi DataTables Server-Side & AJAX
+### 1.7 Master Referensi Bisnis (Detail.xlsx)
 
-1. **Yajra DataTables Server-Side Processing**:
-   - Seluruh daftar transaksi, saldo stok, dan mutasi menggunakan `Yajra DataTables`.
-   - Pengambilan data dilakukan secara asynchronous via AJAX HTTP GET (`/transactions/datatable`).
-   - Query pada DataTables Class secara otomatis menerapkan `WarehousePolicy Scope` (`whereIn('source_warehouse_id', $userWarehouseIds)`).
-   - Mendukung pencarian instan (*instant search*), penyaringan dinamis per gudang/status (FM, SM, PDS, DS), dan pagination tanpa *reload* halaman.
+#### 1.7.1 Lokasi Gudang (17)
 
-2. **Form Submissions & Workflow Actions via AJAX**:
-   - Form pembuatan draft, upload dokumen (`PO`/`DO`/`SPK`/`Surat GH OMM`), dan persetujuan (*Approve*/*Reject*/*Revision*) dilakukan via **AJAX POST/PATCH**.
-   - Respon AJAX mengembalikan JSON standar (`{ success: true, message: '...', redirect_url: '...' }`).
-   - Setelah persetujuan berhasil, DataTables di-refresh otomatis menggunakan method `table.ajax.reload(null, false)` tanpa mengganggu posisi halaman user.
+Sumber resmi kode: tab `Sheet1`. Nama gudang nomor 3 berbeda antar-sheet (`Gudang Panaran` vs `Gudang Pekanbaru / PKR`) — **baseline memakai Sheet1** sampai business owner mengesahkan.
 
-## 7. Modul Sistem
+| No | Nama Gudang | Kode |
+|---:|---|---|
+| 1 | Gudang Medan | `MDN` |
+| 2 | Gudang Batam | `BTM` |
+| 3 | Gudang Pekanbaru | `PKR` |
+| 4 | Gudang Sutami | `STM` |
+| 5 | Gudang Terbanggi Besar | `TBB` |
+| 6 | Gudang Pagardewa | `PGD` |
+| 7 | Gudang Palembang | `PLM` |
+| 8 | Gudang Bojonegara | `BJN` |
+| 9 | Gudang Bogor | `BGR` |
+| 10 | Gudang Jakarta | `JKT` |
+| 11 | Gudang Klari | `KRI` |
+| 12 | Gudang Surya Cipta | `SRC` |
+| 13 | Gudang Cirebon | `CRB` |
+| 14 | Gudang Semarang | `SMG` |
+| 15 | Gudang Berbek | `BRK` |
+| 16 | Gudang Ngoro | `NGR` |
+| 17 | Gudang Pasuruan | `PSR` |
 
-### 7.1 Identity and Access Management (Spatie Permission v7)
+#### 1.7.2 Klasifikasi Material
 
-- Login, logout, lupa kata sandi, dan reset password (Laravel Fortify).
-- Pengelolaan pengguna (`users`) dan status aktif/nonaktif.
-- **Manajemen Peran & Izin (Spatie RBAC v7)**:
-  - CRUD Roles (`super_admin`, `admin_user`, `pejabat_user`, `staf_gudang`, `kepala_gudang`, `persediaan`, `holder_material`, `accounting`, `management`, `tim_inventarisasi`).
-  - CRUD Granular Permissions (`master_data.*`, `transactions.*`, `stock_opname.*`, `reports.*`).
-  - Penetapan Spatie Roles ke Pengguna via Trait `HasRoles` (`$user->assignRole($role)`).
-- **Penetapan Scope Gudang**: Penetapan hak akses gudang fisik ke pengguna via `user_warehouse_assignments`.
-- Penetapan fungsi organisasi (`organizational_functions`), jabatan (`positions`), dan PIC.
-- Session log dan audit riwayat login.
-- Interface service untuk integrasi SSO pada fase berikutnya.
+| Kode | Nama | Catatan |
+|---|---|---|
+| `MPS` | Material Persediaan | Produktif |
+| `ABT` | Material Aset Belum Terpasang | Produktif; retur ABT beralih ke MPS |
+| `SKL` | Material Sirkulasi | Laporan lama menyebut `MKL` — mapping kode lama ke `SKL` |
+| `MT` | Material Tercatat | Penerimaan 1107 |
+| `MEJ` | Material Eks Jaringan | Pengembalian 1105 |
 
-### 7.2 Bank Data
+#### 1.7.3 Kategori Material
 
-- Fungsi organisasi, jabatan, dan PIC.
-- Lokasi gudang dan kode gudang.
-- Lokasi penyimpanan/rack/bin.
-- Jenis dan subjenis transaksi.
-- Klasifikasi material.
-- Kategori material.
-- KIMAP dan nama material.
-- UOM.
-- Status material.
-- Jenis dokumen dan aturan dokumen wajib.
-- Konfigurasi penomoran transaksi.
+| Kode | Nama | Catatan FEFO |
+|---|---|---|
+| `TBG` | Tubular Goods | FIFO |
+| `CAV` | Cock and Valve | FIFO |
+| `FAF` | Fitting and Flange | FIFO |
+| `INS` | Instrument | FIFO |
+| `CHM` | Bahan Kimia | **FEFO wajib** (lacak kedaluwarsa) |
 
-### 7.3 Inventory Core
+Urutan tampilan di DETAIL vs Sheet1 berbeda; identitas adalah **kode unik**, bukan urutan.
 
-- Saldo on-hand, reserved, available, in-transit, quarantined, dan written-off.
-- Lot/periode perolehan dan harga satuan.
-- Nomor kartu material.
-- Lokasi penyimpanan.
-- Inventory movement append-only.
-- Reservation untuk transaksi keluar dan pemindahan.
-- Reversal dan adjustment terkendali.
-- Rekonsiliasi saldo terhadap ledger.
+#### 1.7.4 Status Material
 
-### 7.4 Transaksi Material
+| Kode | Nama | Penggunaan alert |
+|---|---|---|
+| `FM` | Fast Moving | Normal |
+| `SM` | Slow Moving | Warning aging |
+| `PDS` | Potential Dead Stock | Alert management |
+| `DS` | Dead Stock | Calon usulan penghapusan / penyisihan |
 
-- Penerimaan.
-- Pengeluaran.
-- Pengembalian.
-- Pemindahan antar gudang.
-- Penyisihan.
-- Dokumen, referensi, catatan, dan approval.
+#### 1.7.5 Jenis / Subjenis Transaksi
 
-### 7.5 Warehouse Operations
+| Main | Sub | Kode | Modul | Keterangan |
+|---|---|---|---|---|
+| 11 Penerimaan | 01 Pengadaan/Pembelian | `1101` | Inbound | Dari supplier setelah BAST |
+| 11 Penerimaan | 02 Pengembalian (retur) | `1102` | Return | MPS/ABT |
+| 11 Penerimaan | 03 Serah Terima Material Proyek | `1103` | Inbound | BAP |
+| 11 Penerimaan | 04 Pemindahan Antar Gudang | `1104` | Transfer-in | Referensi formulir pemindahan |
+| 11 Penerimaan | 05 Material Eks Jaringan | `1105` | Return | BA pencabutan |
+| 11 Penerimaan | 06 Material Sirkulasi | `1106` | Return | BA pencabutan |
+| 11 Penerimaan | 07 Material Tercatat | `1107` | Inbound | BAP |
+| 22 Pengeluaran | 01 Pemeliharaan/Perbaikan | `2201` | Outbound | |
+| 22 Pengeluaran | 02 Proyek | `2202` | Outbound | Dokumen referensi dapat diminta reviewer |
+| 22 Pengeluaran | 03 Pemindahtanganan | `2203` | Outbound | BA hasil penjualan |
+| 22 Pengeluaran | 04 Pemindahan Antar Gudang | `2204` | Transfer-out | Tidak dipilih di form pengeluaran reguler |
+| 22 Pengeluaran | 05 Kalibrasi | `2205` | Outbound | |
+| 22 Pengeluaran | 06 Survey/Studi/Penelitian | `2206` | Outbound | |
+| 33 Penyisihan | 00 Penyisihan Material | `3300` | Write-off | Produktif → non-produktif |
 
-- Scan QR Code.
-- Cetak dan cetak ulang label.
-- Stock opname.
-- Inventarisasi.
-- Penempatan dan pemindahan lokasi internal.
-- Penanganan selisih.
+Satu transaksi hanya boleh berisi **satu** klasifikasi transaksi.
 
-### 7.6 Reporting and Dashboard
+### 1.8 Keputusan Desain yang Mengikat
 
-- Laporan persediaan.
-- Laporan stok gudang.
-- Laporan mutasi.
-- Rekap transaksi.
-- Laporan stock opname dan inventarisasi.
-- Dashboard nilai, komposisi, transaksi, dan tren.
+1. Aplikasi web internal; fase 1 standalone dengan impor/ekspor Excel.
+2. Kuantitas dan harga bertipe desimal tervalidasi, bukan freetext bebas.
+3. Master (jabatan, klasifikasi, kategori, KIMAP, UOM, jenis transaksi) **wajib dari bank data**.
+4. Lokasi penyimpanan pada sumber disebut freetext; **implementasi memakai master Zona/Rak/Bin** plus catatan bebas, agar zoning, picking, dan opname dapat diotomatisasi.
+5. QR menyimpan token acak (UUID), bukan payload harga. Barcode Code-128 menyimpan nomor kartu.
+6. Ledger append-only. Koreksi lewat reversal/adjustment yang disetujui.
+7. Valuasi baseline: **moving weighted average** pada Buku Persediaan; picking fisik: **FIFO/FEFO**.
+8. Reject dan revision adalah status terpisah. Reject wajib alasan.
+9. Staf Gudang **tidak melihat harga satuan dan jumlah harga** pada inbound/outbound hingga tahap Fungsi Persediaan.
 
-## 8. Model Status Transaksi
+---
 
-Status umum digunakan secara konsisten pada seluruh transaksi:
+## 2. Alur Proses Bisnis (Workflow)
+
+### 2.1 Model Status Transaksi
 
 | Status | Makna |
 |---|---|
-| `draft` | Belum diajukan dan masih dapat diedit pembuat |
-| `submitted` | Diajukan ke tahapan pertama |
-| `under_review` | Sedang diproses reviewer/approver |
-| `revision_requested` | Dikembalikan kepada pelaku sebelumnya dengan catatan |
-| `rejected` | Ditolak dan tidak dapat dilanjutkan |
-| `approved` | Seluruh approval selesai |
-| `posted` | Movement stok/nilai telah tercatat |
-| `completed` | Seluruh aktivitas operasional selesai |
-| `cancelled` | Dibatalkan sebelum posting dengan alasan |
-| `reversed` | Posting dibalik melalui transaksi reversal |
+| `draft` | Masih dapat diedit pembuat |
+| `submitted` | Diajukan ke tahap berikutnya |
+| `under_review` | Sedang direviu |
+| `revision_requested` | Dikembalikan dengan catatan |
+| `rejected` | Ditolak, tidak dilanjutkan |
+| `approved` | Tahap approval saat ini selesai |
+| `warehouse_posted` | Buku Gudang sudah terposting |
+| `inventory_posted` | Buku Persediaan sudah terposting |
+| `in_transit` | Material dalam perjalanan (transfer) |
+| `completed` | Seluruh tahap selesai |
+| `cancelled` | Dibatalkan sebelum posting |
+| `reversed` | Dibalik lewat transaksi reversal |
 
-Status tahapan disimpan terpisah dari status transaksi agar posisi workflow dapat diketahui tanpa mengubah arti status utama.
+Status tahap (`current_stage`) disimpan terpisah agar posisi workflow terlihat tanpa mengubah arti status utama.
 
-## 9. Workflow Transaksi
+Stempel digital pada PDF formulir:
 
-### 9.1 Penerimaan Material
+| Stempel | PIC | Makna |
+|---|---|---|
+| `APPROVED` | User, Kepala Gudang, Persediaan, Holder, Accounting, Tim Inventarisasi | Persetujuan sah |
+| `CHECKED` | Staf Gudang (sumber Excel) | Pemeriksaan fisik selesai |
+| `SUBMITTED` | Staf Gudang (sumber PDF) | Data dikirim ke Kepala Gudang |
+| `QR Passed` | Sistem | Seluruh item penerimaan sudah memiliki label QR |
 
-```mermaid
-flowchart LR
-    U["User mengajukan"] --> P["Persediaan verifikasi"]
-    P --> S["Staf Gudang memeriksa"]
-    S --> K["Kepala Gudang menyetujui"]
-    K --> Q["Posting stok dan cetak QR"]
-```
+**Keputusan implementasi:** tombol Staf Gudang berlabel **Submit** (sesuai PDF terbaru). Sistem tetap mencetak stempel `CHECKED` pada kolom Gudang agar formulir resmi kompatibel dengan Excel.
 
-1. User membuat transaksi, memilih subtype penerimaan, mengisi referensi, mengunggah dokumen, dan memasukkan item.
-2. Sistem menghasilkan nomor transaksi.
-3. Fungsi Persediaan memeriksa informasi, klasifikasi, harga, dan dokumen.
-4. Staf Gudang memeriksa fisik, mengisi nomor kartu, lokasi penyimpanan, dan catatan.
-5. Kepala Gudang melakukan approval.
-6. Sistem mem-posting penerimaan ke ledger dan saldo stok dalam satu database transaction.
-7. Staf Gudang mencetak QR Code. Sistem mencatat status `qr_printed`, jumlah cetak, pengguna, dan waktu.
+### 2.2 Alur Barang Masuk (Inbound / Goods Receipt) dari Supplier
 
-Aturan penting:
-
-- Subtype valid: 1101, 1103, 1104, dan 1107 untuk penerimaan langsung.
-- Subtype pengembalian 1102, 1105, dan 1106 diproses pada modul pengembalian.
-- Jumlah harga dihitung sistem: `quantity_received × unit_price`.
-- Penerimaan dari transfer menggunakan data item dan harga dari transfer, bukan input ulang.
-
-### 9.2 Pengeluaran Material
+Berlaku untuk subtype **1101, 1103, 1104, 1107**. 1101 adalah penerimaan dari pengadaan/pembelian (supplier) setelah administrasi kontrak sampai BAST selesai.
 
 ```mermaid
 flowchart LR
-    U["User meminta"] --> S["Staf Gudang scan dan menyiapkan"]
-    S --> K["Kepala Gudang menyetujui"]
-    K --> P["Persediaan verifikasi nilai"]
-    P --> C["Selesai"]
+    U["1. User input + APPROVED"] --> P["2. Persediaan reviu + APPROVED"]
+    P --> S["3. Staf Gudang kartu, lokasi, Submit"]
+    S --> K["4. Kepala Gudang APPROVED"]
+    K --> Q["5. Cetak QR/Barcode + tempel label"]
+    P -.->|Posting Buku Persediaan| BP[(Laporan Persediaan)]
+    K -.->|Posting Buku Gudang| BG[(Laporan Stok Gudang)]
 ```
 
-1. User memilih material dan jumlah yang diminta.
-2. Sistem memvalidasi `available_quantity` dan membuat reservation saat transaksi diajukan.
-3. Staf Gudang memindai QR, memilih lot/kartu, dan mengisi jumlah yang dikeluarkan.
-4. Kepala Gudang menyetujui pengeluaran fisik; kuantitas keluar diposting ke ledger.
-5. Fungsi Persediaan memverifikasi harga dan nilai transaksi.
-6. Sistem menutup reservation dan menyelesaikan transaksi.
+#### 2.2.1 Tahap 1 — Input & Approval Pengguna/User (OMM Region)
 
-Aturan penting:
+| Field | Wajib | Sumber input | Aturan |
+|---|:---:|---|---|
+| Nomor transaksi | Ya | Sistem | `{SUBTYPE}-{WH}-{YYYYMM}-{SEQ}` |
+| Tanggal transaksi | Ya | User | Format `DD/MM/YYYY` |
+| Kepada | Ya | Bank data jabatan | Kepala/Koordinator Gudang terkait |
+| Dari | Ya | Bank data jabatan | Pengguna sesuai lokasi material/gudang |
+| Klasifikasi transaksi | Ya | Bank data | Hanya 1101 / 1103 / 1104 / 1107; satu per transaksi |
+| Referensi | Ya | Bank data dan/atau freetext | Lihat matriks referensi |
+| Upload dokumen | Ya | File | Sesuai klasifikasi |
+| Penjelasan | Ya | Freetext | Uraian transaksi |
+| Klasifikasi material | Ya | Bank data | Filter KIMAP |
+| Kategori material | Ya | Bank data | Filter KIMAP |
+| KIMAP + nama material | Ya | Bank data | Tidak freetext |
+| Satuan (UOM) | Ya | Sistem | Mengikuti master material |
+| Jumlah diterima | Ya | Numerik | `> 0` |
+| Harga satuan | Ya | Numerik | 1104 di-generate dari formulir pemindahan |
+| Jumlah harga | Ya | Sistem | `qty × unit_price` |
+| Approval User | Ya | Klik | Watermark `APPROVED` kolom Pengguna/User |
 
-- Permintaan tidak boleh melebihi stok tersedia.
-- Jumlah dikeluarkan tidak boleh melebihi jumlah diminta atau saldo lot.
-- Harga berasal dari inventory lot/valuation service.
-- Subtype pengeluaran baseline: 2201, 2202, 2203, 2205, dan 2206.
-- Subtype 2204 digunakan oleh workflow pemindahan antar gudang.
+**Matriks referensi & dokumen inbound**
 
-### 9.3 Pengembalian Material
+| Subtype | Referensi wajib | Dokumen unggah |
+|---|---|---|
+| 1101 Pengadaan/Pembelian | Surat Pesanan, Surat Jalan/DO, BAP, BAST, Penyedia Barang | PO, DO, BAP, BAST |
+| 1103 Serah Terima Proyek | Berita Acara Pemeriksaan | BAP |
+| 1104 Pemindahan Antar Gudang | Formulir Pemindahan Material, Asal Material | Formulir pemindahan |
+| 1107 Material Tercatat | Berita Acara Pemeriksaan | BAP |
 
-1. User memilih transaksi pengeluaran asal jika tersedia.
-2. Data klasifikasi, kategori, material, KIMAP, UOM, harga, dan jumlah maksimum diturunkan dari referensi.
-3. User mengisi jumlah dikembalikan dan mengunggah dokumen.
-4. Staf Gudang melakukan scan/pemeriksaan, mencatat jumlah diterima, nomor kartu, dan lokasi.
-5. Kepala Gudang menyetujui penerimaan fisik.
-6. Fungsi Persediaan memverifikasi nilai dan menyelesaikan posting.
+Untuk **1104**, klasifikasi material, kategori, KIMAP, nama, UOM, harga satuan, dan jumlah harga **tidak diinput ulang** — di-generate dari formulir pemindahan asal.
 
-Sistem menolak jumlah diterima yang melebihi jumlah dikembalikan. Untuk material yang tidak memiliki referensi transaksi lama, Persediaan wajib memvalidasi harga sebelum posting final.
+#### 2.2.2 Tahap 2 — Reviu Fungsi Persediaan
 
-### 9.4 Pemindahan Antar Gudang
+- Persediaan **tidak melakukan input**. Seluruh data tahap 1 tampil utuh termasuk harga.
+- Benar → `APPROVED` kolom Persediaan. **Buku Persediaan terposting** (laporan persediaan bertambah).
+- Ada reviu → `revision_requested` / `rejected` + catatan, kembali ke User.
+
+#### 2.2.3 Tahap 3 — Staf Gudang (putaway)
+
+Harga satuan dan jumlah harga **disembunyikan**. Field baru:
+
+| Field | Wajib | Aturan |
+|---|:---:|---|
+| Nomor kartu | Ya | Freetext identitas fisik; unik per gudang |
+| Lokasi penyimpanan | Ya | Pilih Zona → Rak → Bin (master) |
+| Keterangan | Tidak | Freetext |
+| Submit | Ya | Stempel `CHECKED`, data ke Kepala Gudang |
+
+Sistem membuat/menautkan `stock_lots` (periode perolehan = `MM/YY` tanggal transaksi) dan merencanakan label QR.
+
+#### 2.2.4 Tahap 4 — Kepala Gudang
+
+- Reviu data (tanpa harga) → `APPROVED` kolom Gudang.
+- **Buku Gudang terposting** (`on_hand` bertambah di bin tujuan).
+- Reject mengembalikan ke Staf Gudang.
+
+#### 2.2.5 Tahap 5 — Cetak QR Code & Barcode
+
+- Staf Gudang wajib mencetak label dan menempelkannya pada seluruh material.
+- Setelah seluruh item memiliki QR, formulir mendapat watermark **`QR Passed`**.
+- Jika belum dicetak: notifikasi ke Staf Gudang & Kepala Gudang, masuk antrian *pending process*.
+
+Isi tampilan setelah scan (server-side):
+
+- Klasifikasi, kategori, KIMAP, nama, UOM, periode perolehan, nomor kartu, gudang, lokasi (zona/rak/bin), kuantitas sisa, status material, status stok, tanggal kedaluwarsa (jika ada).
+
+### 2.3 Alur Penyimpanan & Manajemen Lokasi Gudang (Warehouse Zoning / Bin)
+
+Setiap gudang memiliki hierarki lokasi yang sama.
+
+```text
+WAREHOUSE (contoh: BGR)
+ └── ZONE        (contoh: Z-A Bahan Kimia, Z-B Tubular, Z-RCV Receiving, Z-SHP Shipping)
+      └── RACK   (contoh: RAK-A1)
+           └── BIN (contoh: A1-02-03)
+```
+
+Lokasi khusus (wajib di-seed per gudang):
+
+| Tipe | Kode saran | Fungsi |
+|---|---|---|
+| `staging_in` | `RCV` | Area penerimaan sebelum putaway |
+| `staging_out` | `SHP` | Area packing / waiting issue |
+| `transit` | `TRN` | Buffer in-transit antar gudang |
+| `quarantine` | `QRN` | Material usulan hapus / sengketa |
+| `non_productive` | `NPD` | Material hasil penyisihan 3300 |
+| `bin` | sesuai denah | Lokasi simpan tetap |
+
+#### 2.3.1 Putaway (setelah inbound)
+
+1. Material secara logis masuk `staging_in` saat Kepala Gudang inbound menyetujui, atau langsung ke bin yang diisi Staf Gudang pada tahap 3.
+2. **Keputusan baseline:** Staf Gudang wajib memilih bin tujuan pada tahap 3 inbound; sistem memvalidasi bin aktif, berkapasitas, dan sesuai zona kategori (contoh Bahan Kimia hanya di zona CHM).
+3. Mutasi bin internal (tanpa ganti gudang, tanpa ganti nilai) memakai transaksi `location_transfer` berapproval Kepala Gudang, menghasilkan movement `putaway` / `bin_move` pada Buku Gudang saja.
+
+#### 2.3.2 Aturan lokasi
+
+- Satu label/kartu berada di satu bin pada satu waktu.
+- Material `quarantined` dan `written_off` tidak bisa dipilih pengeluaran/transfer reguler.
+- Transfer antar gudang: stok asal pindah ke lokasi `transit` gudang asal, kemudian ke `staging_in` gudang tujuan, lalu putaway bin tujuan.
+- Master lokasi dikelola Super Admin; Staf Gudang tidak mengetik lokasi bebas sebagai identitas (hanya catatan tambahan).
+
+### 2.4 Alur Barang Keluar (Outbound / Picking / Packing / FIFO-FEFO)
+
+Berlaku subtype **2201, 2202, 2203, 2205, 2206**. Subtype 2204 diproses di modul pemindahan.
+
+```mermaid
+flowchart LR
+    U["1. User minta + APPROVED"] --> S["2. Staf Gudang pick scan QR + Submit"]
+    S --> K["3. Kepala Gudang APPROVED"]
+    K --> P["4. Pack + cetak SJ & formulir"]
+    P --> R["5. Penerima + unggah SJ bertanda tangan"]
+    R --> I["6. Persediaan APPROVED"]
+    K -.->|Posting Buku Gudang| BG[(Stok Gudang berkurang)]
+    I -.->|Posting Buku Persediaan| BP[(Laporan Persediaan berkurang)]
+```
+
+#### 2.4.1 Tahap 1 — Permintaan User
+
+| Field | Wajib | Aturan |
+|---|:---:|---|
+| Nomor & tanggal | Ya | Nomor sistem, tanggal user |
+| Kepada / Dari | Ya | Bank data jabatan |
+| Klasifikasi transaksi | Ya | 2201 / 2202 / 2203 / 2205 / 2206 |
+| Referensi | Tidak* | Freetext: Surat Persetujuan Pemanfaatan, BA Hasil Penjualan |
+| Upload dokumen | Tidak* | Wajib secara bisnis untuk 2202, 2203, 2206; reviewer boleh reject jika kosong |
+| Penjelasan | Ya | Freetext |
+| Klasifikasi + KIMAP + UOM | Ya | Bank data; UOM generated |
+| Jumlah diminta | Ya | Ditolak jika `> available_quantity` |
+| Approval User | Ya | `APPROVED` kolom Pengguna/User |
+
+\*PDF menetapkan referensi/upload **optional**, tetapi reviewer/verifikator boleh menolak jika klasifikasi 2202/2203/2206 tidak dilampiri dokumen.
+
+Saat submit, sistem membuat **reservasi stok** pada lot FIFO/FEFO terpilih agar tidak overselling.
+
+#### 2.4.2 Strategi Picking FIFO / FEFO
+
+| Kondisi material | Strategi | Urutan lot |
+|---|---|---|
+| `is_expiry_tracked = true` (default kategori `CHM`) | **FEFO** | `expiry_date ASC`, lalu `acquisition_period ASC` |
+| Lainnya | **FIFO** | `acquisition_period ASC`, lalu `received_at ASC` |
+
+Alur picking Staf Gudang:
+
+1. Sistem menampilkan *suggested pick list* per baris: lot, kartu, bin, qty.
+2. Staf **wajib scan QR** label. Scan mengisi nomor kartu (generated) dan mengikat lot.
+3. Kuantitas: scan seluruh unit **atau** scan sekali + input qty.
+4. `qty_issued ≤ qty_requested` dan `≤ remaining_quantity` lot/label. Jika lebih, sistem menolak.
+5. Scan lot yang **bukan** kandidat FIFO/FEFO berikutnya wajib mengisi `fifo_override_reason`; dicatat di audit log.
+6. Setelah pick, kuantitas pindah ke lokasi `staging_out` (packing).
+
+#### 2.4.3 Tahap 3 — Kepala Gudang
+
+- Approval → watermark `APPROVED` kolom Gudang.
+- **Buku Gudang berkurang**. Reservation terpenuhi.
+- Reject + catatan kembali ke Staf Gudang.
+
+#### 2.4.4 Tahap 4 — Packing & Cetak Dokumen
+
+Staf Gudang mencetak:
+
+- Formulir Pengeluaran Material
+- Surat Jalan (ditandatangani manual sesuai ketentuan)
+
+Dokumen ini adalah bukti sah mengeluarkan material dari area gudang dan dokumen perjalanan.
+
+#### 2.4.5 Tahap 5 — Penerima
+
+- Staf Gudang mengisi nama instansi dan nama penerima.
+- **Wajib unggah** surat jalan yang sudah ditandatangani penerima.
+- Approval kolom Penerima.
+
+#### 2.4.6 Tahap 6 — Fungsi Persediaan
+
+- Seluruh data termasuk harga satuan (dari lot/valuation) dan jumlah harga (`qty_issued × unit_price`) tampil.
+- Persediaan tidak input harga.
+- Approval → **Buku Persediaan berkurang**, status `completed`.
+- Reviu → reject + catatan kembali ke fungsi gudang.
+
+### 2.5 Alur Pengembalian Material (Return)
+
+Subtype **1102** (MPS/ABT), **1105** (Eks Jaringan), **1106** (Sirkulasi).
+
+1. **User** mengisi header. Referensi:
+   - 1102 / kalibrasi: pilih Formulir Pengeluaran sebelumnya (bank data) → klasifikasi, kategori, KIMAP, harga **generated**.
+   - 1105 / 1106: BA Pemasangan/Pencabutan (freetext) + unggah BAP. Harga satuan diisi `0`.
+   - Retur ABT **beralih klasifikasi menjadi MPS**.
+2. Jumlah dikembalikan numerik; approval User.
+3. **Staf Gudang:** scan QR, jumlah diterima `≤` jumlah dikembalikan, nomor kartu, lokasi bin, submit.
+   - 1102 MPS: nomor kartu dapat generated dari kartu asal.
+   - ABT/sirkulasi/eks jaringan: kartu baru.
+4. **Kepala Gudang** approve → posting Buku Gudang.
+5. **Persediaan** approve → posting Buku Persediaan (`jumlah harga = qty_diterima × harga satuan`).
+
+### 2.6 Alur Pemindahan Antar Gudang (Mutasi)
+
+Kode keluar `2204`, kode masuk tujuan `1104`. Gudang asal ≠ gudang tujuan.
 
 ```mermaid
 flowchart TB
-    U["User Gudang Asal"] --> SA["Staf Gudang Asal"]
-    SA --> KA["Kepala Gudang Asal"]
-    KA --> T["Material In Transit"]
-    T --> PR["Penerima Material"]
-    PR --> PA["Persediaan Asal"]
-    PA --> ST["Staf Gudang Tujuan"]
-    ST --> KT["Kepala Gudang Tujuan"]
-    KT --> D["Stok Gudang Tujuan"]
+    U["1. User asal APPROVED"] --> S1["2. Staf Gudang asal pick + Submit"]
+    S1 --> K1["3. Kepala Gudang asal APPROVED"]
+    K1 --> PR["4. Cetak SJ + formulir"]
+    PR --> R["5. Penerima + unggah SJ"]
+    R --> P["6. Persediaan asal APPROVED"]
+    P --> S2["7. Staf Gudang tujuan kartu & lokasi + Submit"]
+    S2 --> K2["8. Kepala Gudang tujuan APPROVED"]
+    K1 -.->|On-hand asal → in-transit| T[(In-Transit)]
+    P -.->|Buku Persediaan asal berkurang| BP
+    K2 -.->|In-transit → on-hand tujuan| BG2
 ```
 
-1. User gudang asal mengajukan material dan tujuan.
-2. Sistem membuat reservation pada gudang asal.
-3. Staf Gudang Asal melakukan scan dan konfirmasi jumlah.
-4. Kepala Gudang Asal menyetujui keberangkatan; stok berpindah dari on-hand ke in-transit.
-5. Penerima material mengonfirmasi penerimaan administratif/fisik awal.
-6. Persediaan asal memverifikasi harga dan nilai.
-7. Staf Gudang Tujuan melakukan pemeriksaan fisik dan check.
-8. Kepala Gudang Tujuan menyetujui; sistem mengurangi in-transit dan menambah stok tujuan.
+Aturan penting:
 
-Transfer tidak boleh langsung menambah stok tujuan saat stok asal dikeluarkan. Status in-transit wajib tersedia agar material yang sedang dikirim tetap dapat direkonsiliasi.
+- Jumlah diminta tidak boleh melebihi stok tersedia gudang asal.
+- Picking wajib scan QR + FIFO/FEFO.
+- Setelah Kepala Gudang asal approve, stok fisik gudang asal berkurang dan masuk **in-transit** (tidak langsung menambah gudang tujuan).
+- Staf Gudang tujuan menyiapkan **nomor kartu baru** dan bin putaway.
+- Penerimaan 1104 di gudang tujuan memakai data item/harga dari formulir pemindahan (tidak input ulang).
+- Transfer terlambat terhadap SLA memicu notifikasi.
 
-### 9.5 Penyisihan Material
+### 2.7 Alur Penyisihan Material (3300)
 
-1. User membuat transaksi berdasarkan Surat/Formulir Rekapitulasi Usulan Penyisihan Material dari Pengelola/Holder Material (GH OMM).
-2. Sistem memvalidasi saldo dan memindahkan jumlah ke reservation/quarantine.
-3. Staf Gudang memeriksa material dan nomor kartu, lalu memberikan tanda periksa (`CHECKED`).
-4. Kepala Gudang menyetujui kondisi fisik (`APPROVED`).
-5. Fungsi Persediaan memverifikasi harga dan nilai (`APPROVED`).
-6. Pada approval final, sistem memindahkan saldo dari quarantined menjadi written-off melalui ledger.
+Penyisihan hanya dilakukan setelah ada **Surat Pengelola/Holder (GH OMM)** berdasarkan Formulir Rekapitulasi Usulan Penghapusan.
 
-Material yang sudah berstatus quarantined tidak dapat dipilih untuk pengeluaran atau transfer reguler.
+1. User: header + referensi Formulir Rekapitulasi + Nota Dinas, unggah dokumen, pilih KIMAP, jumlah disisihkan `≤ available`. Approval User.
+2. Staf Gudang: **nomor kartu baru** (beralih menjadi material penyisihan), keterangan, submit.
+3. Kepala Gudang approve:
+   - Buku Gudang produktif **berkurang**
+   - Buku Gudang non-produktif/penyisihan **bertambah**
+4. Persediaan approve (harga generated):
+   - Laporan Persediaan produktif berkurang
+   - Laporan Persediaan non-produktif bertambah
 
-### 9.6 Stock Opname
+Laporan mutasi **hanya** mencatat transaksi material produktif.
 
-1. Staf Gudang membuat sesi berdasarkan gudang, periode (mingguan/bulanan), dan ruang lingkup.
-2. Sistem mengambil snapshot saldo pada saat sesi dikunci.
-3. Tim menghitung fisik material dengan 2 (dua) metode pilihan:
-   - **Metode 1 (Manual Count Input)**: Menghitung fisik material secara manual, kemudian menginput kuantitas hasil hitung.
-   - **Metode 2 (QR Scan Count)**: Memindai QR Code pada setiap item material secara individu, di mana sistem secara otomatis menghitung akumulasi total item yang di-scan.
-4. Sistem menghitung `variance = physical_quantity - snapshot_quantity`.
-5. Keterangan wajib diisi (*mandatory freetext*) jika variance tidak nol.
-6. Staf Gudang melakukan konfirmasi (`CHECKED`) dan Kepala Gudang menyetujui hasil (`APPROVED`).
-7. Selisih tidak otomatis mengubah stok. Sistem membuat draft inventory adjustment untuk approval terpisah oleh Kepala Gudang dan Fungsi Persediaan.
+### 2.8 Alur Stok Opname & Penyesuaian (Stock Adjustment & Audit)
 
-### 9.7 Inventarisasi
+Periode: berkala mingguan dan/atau periodik bulanan. Pelaksana: Staf Gudang, approval Kepala Gudang.
 
-Alur sama dengan stock opname, tetapi pelaksana adalah Tim Inventarisasi yang ditugaskan pada sesi. Sistem menyimpan surat tugas, anggota, periode, gudang, ruang lingkup, hasil per item (menggunakan Metode 1 atau Metode 2 scan QR), foto/dokumen, serta approval Tim Inventarisasi (`APPROVED`) dan Kepala Gudang (`APPROVED`).
+```mermaid
+flowchart LR
+    A["Buat sesi + freeze snapshot"] --> B["Hitung fisik Metode 1 atau 2"]
+    B --> C["Hitung selisih otomatis"]
+    C --> D["Keterangan wajib jika ≠ 0"]
+    D --> E["Staf Gudang APPROVED"]
+    E --> F["Kepala Gudang APPROVED"]
+    F --> G["Draft Adjustment"]
+    G --> H["Approval Kepala Gudang + Persediaan"]
+    H --> I["Posting ledger"]
+```
 
-## 10. Aturan Dokumen dan Approval
+#### 2.8.1 Pelaksanaan hitung
 
-### 10.1 Dokumen dan Mandatory Attachment Rules
+Scan QR menampilkan: klasifikasi, kategori, KIMAP, nama, saldo akhir.
 
-Sesuai spesifikasi pada Tab **`PROSES`** `Detail.xlsx`, aturan lampiran dokumen (*attach file*) untuk setiap modul transaksi adalah sebagai berikut:
+| Metode | Cara | Hasil |
+|---|---|---|
+| Metode 1 Manual | Hitung fisik, input qty | `physical_quantity` |
+| Metode 2 QR Scan | Scan setiap unit item yang sama | Sistem mengakumulasi jumlah scan |
 
-| Modul Transaksi | Attach File Mandatory | Jenis Dokumen Wajib / Keterangan |
+Rumus: `variance = physical_quantity − snapshot_quantity` (hasil hitung dikurangi saldo akhir).
+
+Jika `variance ≠ 0`, kolom penjelasan **wajib**.
+
+**Selisih tidak mengubah stok secara otomatis.** Sistem membuat draft `inventory_adjustment` yang wajib disetujui Kepala Gudang dan Fungsi Persediaan sebelum posting ke kedua buku.
+
+### 2.9 Inventarisasi
+
+Alur identik dengan opname, pelaksana **Tim Inventarisasi**, approval Tim Inventarisasi lalu Kepala Gudang. Output: Laporan Inventarisasi Material.
+
+### 2.10 Rencana Kebutuhan Material (RKM) — dari PDF
+
+User menyusun RKM sebelum Purchase Requisition. Pemilihan item melalui Inventory Material List (IML).
+
+| Field | Sumber | Aturan |
+|---|---|---|
+| Nomor & tanggal | Sistem / user | `DD/MM/YYYY` |
+| Klasifikasi, KIMAP, nama | Bank data | Jika KIMAP belum ada, register dulu |
+| Periode perolehan, UOM, lokasi gudang | Sistem | Mengikuti material terpilih |
+| BQ (Bill of Quantity) | User | Numerik |
+| SOH | Sistem | Stok akhir pada tanggal RKM |
+| ALS (Allocation Stock) | Sistem | Rekap NCI sebelumnya |
+| AVS (Available Stock) | Sistem | `SOH − ALS` real-time |
+| NCI (Non Cash Item) | User | Ditolak jika `NCI > 2 × SOH` |
+| CI (Cash Item) | Sistem | `BQ − NCI` |
+| PR | Sistem | `PR = CI` |
+| Justifikasi | User | Wajib |
+| Approval | User | Watermark Pengguna |
+
+### 2.11 Usulan Penghapusan — dari PDF
+
+1. **User** mengajukan sesuai kriteria DAK: klasifikasi, KIMAP, tahun perolehan (sistem), lokasi gudang (sistem), jumlah, alasan (bank data), kondisi (bank data), unggah foto/BA kehilangan, approval.
+2. **Pengelola/Holder** reviu, penjelasan, approval → data ke Accounting. Output: Formulir Rekapitulasi Usulan Penghapusan.
+3. **Accounting** isi nilai perolehan dan nilai buku (`N/A` jika tidak ada), keterangan opsional, approval → kembali ke Holder.
+4. Holder menerbitkan Nota Dinas penyisihan ke Accounting, Persediaan, dan Gudang → memicu modul 3300.
+
+### 2.12 Aturan Dokumen & Approval
+
+| Modul | Attach wajib | Jenis dokumen |
 |---|:---:|---|
-| **Penerimaan Material** | **YA** | Dokumen Penerimaan: PO, DO, BAP (Berita Acara Pemeriksaan), BAST (Berita Acara Serah Terima). |
-| **Pengeluaran Material** | **YA** | Dokumen Pengeluaran: Nota Dinas, Memo Internal, atau SPK. |
-| **Pengembalian Material** | **YA** | Dokumen Pengembalian: Nota Dinas, Memo, atau Berita Acara Pencabutan. |
-| **Pemindahan Material** | **YA** | Dokumen Pemindahan Antar Gudang: Surat Jalan / Memo Pemindahan. |
-| **Penyisihan Material** | **YA** | Dokumen Penyisihan: Nota Dinas / Memo / Surat Rekapitulasi Usulan Penyisihan dari GH OMM. |
-| **Stock Opname** | TIDAK | Aktivitas internal opname fisik (tidak mewajibkan file upload). |
-| **Inventarisasi** | TIDAK | Sesi inventarisasi fisik (foto pendukung opsional). |
+| Penerimaan | Ya | PO, DO, BAP, BAST sesuai subtype |
+| Pengeluaran | Kondisional | Nota Dinas / Memo / SPK / Surat Persetujuan / BA Penjualan |
+| Pengembalian | Ya | Formulir pengeluaran atau BA pencabutan + BAP |
+| Pemindahan | Ya | Surat persetujuan + SJ bertanda tangan (tahap penerima) |
+| Penyisihan | Ya | Formulir rekapitulasi + Nota Dinas GH OMM |
+| Stock Opname | Tidak | Foto opsional |
+| Inventarisasi | Tidak | Foto opsional |
+| Usulan Penghapusan | Ya | Foto material / BA kehilangan |
+| RKM | Tidak | — |
 
-Aturan teknis dokumen:
-- Dokumen disimpan di object storage; database hanya menyimpan metadata dan object key.
-- File diperiksa berdasarkan extension, MIME type, ukuran, dan checksum.
-- File tidak dapat diganti setelah transaksi posted; koreksi dilakukan dengan menambah versi dokumen.
-- Unduhan dokumen wajib melalui authorization dan signed URL berumur pendek.
+Aturan teknis: file di object storage privat; database hanya metadata + checksum; MIME whitelist; tidak diganti setelah posted (versioning); unduhan lewat signed URL; reject wajib alasan; pembuat tidak menyetujui tahap reviewer pada transaksi yang sama.
 
-### 10.2 Approval dan Dynamic Watermark Stamp
-
-- Approver tidak boleh menyetujui tahapan yang bukan kewenangannya.
-- Pembuat tidak boleh menyetujui tahapan reviewer pada transaksi yang sama, kecuali kebijakan tertulis mengizinkan.
-- Reject wajib memiliki alasan.
-- Revision mengembalikan transaksi ke tahapan yang ditentukan dan menyimpan versi perubahan.
-- Approval menyimpan user, role snapshot, position snapshot, warehouse scope, keputusan, catatan, timestamp, dan IP/user agent.
-- **Dynamic Watermark Stamp**: Setiap persetujuan atau pemeriksaan menghasilkan stempel digital (*watermark*) pada cetakan formulir resmi:
-  - Stempel `CHECKED` untuk pemeriksaan Staf Gudang / Gudang Tujuan.
-  - Stempel `APPROVED` untuk persetujuan Pengguna, Kepala Gudang, Persediaan, dan Tim Inventarisasi.
-  - Watermark merupakan representasi dari data `transaction_approvals` yang aman dan tidak dapat dipalsukan.
-- Setelah posted, field finansial dan kuantitas dikunci.
-
-## 11. Penomoran Transaksi
-
-Format baseline:
+### 2.13 Penomoran Transaksi
 
 ```text
 {SUBTYPE}-{WAREHOUSE}-{YYYYMM}-{SEQUENCE}
+Contoh: 1101-MDN-202609-000001
+        2202-BGR-202609-000015
+        3300-JKT-202609-000003
+        SO-BGR-202609-000001
+        RKM-MDN-202609-000004
 ```
 
-Contoh:
-
-```text
-1101-MDN-202608-000001
-2202-BGR-202608-000015
-3300-JKT-202608-000003
-```
-
-Nomor dibuat di server menggunakan tabel sequence per subtype, gudang, dan periode. Unique constraint mencegah nomor ganda saat transaksi serentak.
-
-## 12. Rancangan Data
-
-### 12.1 Entity Relationship Utama
-
-```mermaid
-erDiagram
-    WAREHOUSES ||--o{ WAREHOUSE_LOCATIONS : contains
-    WAREHOUSES ||--o{ USER_WAREHOUSE_ASSIGNMENTS : scopes
-    USERS ||--o{ USER_WAREHOUSE_ASSIGNMENTS : assigned
-    MATERIALS }o--|| MATERIAL_CLASSIFICATIONS : classified_as
-    MATERIALS }o--|| MATERIAL_CATEGORIES : categorized_as
-    MATERIALS }o--|| UOMS : measured_in
-    INVENTORY_TRANSACTIONS ||--|{ INVENTORY_TRANSACTION_ITEMS : contains
-    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_APPROVALS : approved_by
-    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_DOCUMENTS : attaches
-    INVENTORY_TRANSACTION_ITEMS ||--o{ INVENTORY_MOVEMENTS : produces
-    STOCK_LOTS ||--o{ INVENTORY_MOVEMENTS : referenced_by
-    STOCK_LOTS ||--o{ STOCK_LABELS : identified_by
-    STOCK_COUNT_SESSIONS ||--|{ STOCK_COUNT_ITEMS : contains
-```
-
-### 12.2 Tabel Identity dan Organisasi
-
-#### `users`
-
-- `id`
-- `employee_number`
-- `name`
-- `email`
-- `password`
-- `status`
-- `last_login_at`
-- timestamps
-
-#### `organizational_functions`
-
-- `id`, `code`, `name`, `parent_id`, `is_active`
-
-#### `positions`
-
-- `id`, `function_id`, `code`, `name`, `is_active`
-
-#### `user_position_assignments`
-
-- `user_id`, `position_id`, `valid_from`, `valid_until`, `is_primary`
-
-#### `warehouses`
-
-- `id`, `code`, `name`, `region_code`, `address`, `timezone`, `is_active`
-
-#### `warehouse_locations`
-
-- `id`, `warehouse_id`, `code`, `name`, `type`, `parent_id`, `is_active`
-
-#### `user_warehouse_assignments`
-
-- `user_id`, `warehouse_id`, `role_scope`, `valid_from`, `valid_until`
-
-### 12.3 Tabel Master Material
-
-#### `material_classifications`
-
-- `id`, `code`, `name`, `is_active`, `sort_order`
-
-#### `material_categories`
-
-- `id`, `code`, `name`, `is_active`, `sort_order`
-
-#### `uoms`
-
-- `id`, `code`, `name`, `decimal_precision`, `is_active`
-
-#### `materials`
-
-- `id`
-- `kimap` — unique
-- `name`
-- `classification_id`
-- `category_id`
-- `base_uom_id`
-- `description`
-- `is_serialized`
-- `is_active`
-
-#### `material_status_assignments`
-
-- `id`, `material_id`, `warehouse_id`
-- `status_code` — FM/SM/PDS/DS
-- `effective_from`, `effective_until`
-- `reason`, `assigned_by`
-
-### 12.4 Tabel Transaksi
-
-#### `inventory_transactions`
-
-- `id` — UUID/ULID
-- `transaction_number` — unique
-- `transaction_type` — receipt/issue/return/transfer/write_off/adjustment
-- `transaction_subtype_id`
-- `source_warehouse_id`
-- `destination_warehouse_id`
-- `transaction_date`
-- `status`
-- `current_stage`
-- `requested_by`
-- `reference_text`
-- `explanation`
-- `submitted_at`, `posted_at`, `completed_at`
-- `lock_version` — optimistic concurrency pada proses edit
-- timestamps, soft delete hanya untuk draft
-
-#### `inventory_transaction_items`
-
-- `id`, `transaction_id`, `line_number`
-- `material_id`, `uom_id`
-- `source_location_id`, `destination_location_id`
-- `requested_quantity`, `processed_quantity`
-- `unit_price`, `total_amount`
-- `source_lot_id`, `source_stock_label_id`
-- `card_number`, `notes`
-
-#### `transaction_references`
-
-- `id`, `transaction_id`, `reference_type`, `reference_number`
-- `referenced_transaction_id`, `issued_at`, `issuer`
-
-#### `transaction_documents`
-
-- `id`, `transaction_id`, `document_type_id`
-- `file_name`, `object_key`, `mime_type`, `size`, `checksum`
-- `version`, `uploaded_by`, `uploaded_at`
-
-#### `transaction_approvals`
-
-- `id`, `transaction_id`, `stage_code`, `sequence`
-- `required_role`, `assigned_user_id`
-- `decision`, `notes`
-- `actor_name_snapshot`, `position_snapshot`, `role_snapshot`
-- `decided_at`, `ip_address`, `user_agent`
-
-#### `transaction_histories`
-
-- `id`, `transaction_id`, `activity`, `from_status`, `to_status`
-- `metadata`, `actor_id`, `created_at`
-
-### 12.5 Tabel Inventory
-
-#### `stock_lots`
-
-- `id`, `warehouse_id`, `material_id`
-- `acquisition_period`, `receipt_item_id`
-- `unit_price`, `original_quantity`, `remaining_quantity`
-- `status`
-
-#### `stock_labels`
-
-- `id`, `stock_lot_id`, `warehouse_location_id`
-- `qr_token` — unique dan tidak mudah ditebak
-- `card_number`
-- `label_quantity`, `remaining_quantity`
-- `printed_count`, `last_printed_at`, `status`
-
-#### `inventory_movements`
-
-- `id`, `transaction_id`, `transaction_item_id`
-- `warehouse_id`, `warehouse_location_id`
-- `material_id`, `stock_lot_id`, `stock_label_id`
-- `movement_type`
-- `quantity_delta`, `amount_delta`
-- `occurred_at`, `posted_by`
-- `reversal_of_id`
-
-#### `stock_balances`
-
-- `warehouse_id`, `warehouse_location_id`, `material_id`, `stock_lot_id`
-- `on_hand_quantity`
-- `reserved_quantity`
-- `in_transit_quantity`
-- `quarantined_quantity`
-- `average_unit_cost`
-- `updated_at`
-
-Unique key menggunakan kombinasi gudang, lokasi, material, dan lot. Perubahan dilakukan dengan row lock di dalam database transaction.
-
-#### `stock_reservations`
-
-- `id`, `transaction_item_id`, `stock_lot_id`
-- `reserved_quantity`, `consumed_quantity`
-- `status`, `expires_at`
-
-### 12.6 Tabel Stock Opname dan Inventarisasi
-
-#### `stock_count_sessions`
-
-- `id`, `session_number`, `session_type`
-- `warehouse_id`, `period_start`, `period_end`, `snapshot_at`
-- `scope`, `status`, `created_by`, `approved_by`, timestamps
-
-#### `stock_count_assignments`
-
-- `session_id`, `user_id`, `role_in_session`
-
-#### `stock_count_items`
-
-- `session_id`, `material_id`, `stock_lot_id`, `stock_label_id`
-- `system_quantity`, `physical_quantity`, `variance_quantity`
-- `explanation`, `counted_by`, `counted_at`
-
-#### `inventory_adjustments`
-
-- `id`, `stock_count_session_id`, `status`, `reason`
-- `approved_by_head`, `approved_by_inventory`, `posted_at`
-
-### 12.7 Constraint Penting
-
-- `materials.kimap` unique.
-- `warehouses.code` unique.
-- `inventory_transactions.transaction_number` unique.
-- `stock_labels.qr_token` unique.
-- Quantity tidak boleh negatif pada transaksi input.
-- `available_quantity = on_hand_quantity - reserved_quantity - quarantined_quantity`.
-- Saldo tidak boleh negatif setelah posting.
-- Approved/posted transaction tidak dapat dihapus.
-- Satu approval aktif per transaction dan stage sequence.
-- Transfer wajib memiliki gudang asal berbeda dari gudang tujuan.
-
-## 13. Konsistensi dan Posting Stok
-
-Setiap posting menggunakan pola berikut:
-
-1. Authorization dan validasi state.
-2. Memulai database transaction.
-3. Mengunci baris `stock_balances` dan reservation terkait menggunakan `SELECT ... FOR UPDATE`.
-4. Memvalidasi ulang saldo dan versi transaksi.
-5. Menulis movement ledger.
-6. Memperbarui projection `stock_balances`.
-7. Memperbarui status transaksi.
-8. Menulis outbox event dan audit log.
-9. Commit.
-10. Queue worker memproses notifikasi setelah commit.
-
-Idempotency key wajib tersedia pada endpoint posting/approval untuk mencegah double submit akibat klik ganda atau retry jaringan.
-
-## 14. API Utama
-
-Prefix API: `/api/v1`
-
-### 14.1 Master Data
-
-```text
-GET    /warehouses
-GET    /warehouses/{warehouse}/locations
-GET    /materials
-GET    /materials/{material}
-POST   /materials
-PATCH  /materials/{material}
-GET    /transaction-types
-GET    /document-types
-```
-
-### 14.2 Transaksi
-
-```text
-GET    /transactions
-POST   /transactions
-GET    /transactions/{transaction}
-PATCH  /transactions/{transaction}
-POST   /transactions/{transaction}/items
-POST   /transactions/{transaction}/documents
-POST   /transactions/{transaction}/submit
-POST   /transactions/{transaction}/approve
-POST   /transactions/{transaction}/request-revision
-POST   /transactions/{transaction}/reject
-POST   /transactions/{transaction}/cancel
-POST   /transactions/{transaction}/reverse
-```
-
-### 14.3 QR dan Operasi Gudang
-
-```text
-GET    /qr/{token}
-POST   /transactions/{transaction}/scan
-POST   /transactions/{transaction}/labels/print
-POST   /stock-counts
-POST   /stock-counts/{session}/scan
-POST   /stock-counts/{session}/submit
-POST   /stock-counts/{session}/approve
-```
-
-### 14.4 Laporan
-
-```text
-GET    /reports/inventory
-GET    /reports/warehouse-stock
-GET    /reports/movements
-GET    /reports/transactions
-GET    /reports/stock-counts
-POST   /exports
-GET    /exports/{export}
-```
-
-Semua list endpoint menggunakan pagination, filter whitelist, sort whitelist, dan pembatasan warehouse scope.
-
-## 15. Halaman Aplikasi
-
-### 15.1 Umum
-
-- Login.
-- Dashboard sesuai role.
-- Notifikasi dan daftar tugas approval.
-- Profil dan pengaturan akun.
-
-### 15.2 Transaksi
-
-- Daftar transaksi dengan filter dan saved view.
-- Form transaksi bertahap: header, referensi/dokumen, item, review, submit.
-- Detail transaksi dengan timeline.
-- Inbox approval.
-- Scan QR dan pemeriksaan fisik.
-- Cetak formulir, surat jalan, dan label QR.
-
-### 15.3 Gudang
-
-- Posisi stok.
-- Kartu material.
-- Lokasi penyimpanan.
-- Material reserved, quarantined, dan in-transit.
-- Sesi stock opname.
-- Sesi inventarisasi.
-
-### 15.4 Administrasi
-
-- Pengguna, role, permission, dan penugasan gudang.
-- Gudang dan lokasi.
-- Master material.
-- Jenis transaksi dan dokumen wajib.
-- Import master data.
-- Audit log.
-
-## 16. Laporan
-
-### 16.1 Laporan Persediaan Material
-
-Kolom minimum:
-
-- Gudang dan lokasi.
-- Klasifikasi dan kategori.
-- KIMAP dan nama material.
-- UOM.
-- Periode perolehan.
-- Nomor kartu/lot.
-- Saldo awal, penerimaan, pengeluaran, penyisihan, saldo akhir.
-- Harga satuan dan nilai saldo akhir.
-- Status material.
-
-### 16.2 Laporan Stok Gudang
-
-Fokus pada kuantitas operasional per gudang, lokasi, material, lot, kartu, dan status stok.
-
-### 16.3 Laporan Mutasi
-
-Menampilkan seluruh movement berurutan dengan nomor transaksi, waktu, jenis, referensi, masuk, keluar, nilai, saldo berjalan, dan pengguna posting.
-
-### 16.4 Rekapitulasi Transaksi
-
-Agregasi berdasarkan periode, gudang, jenis/subtype, klasifikasi, kategori, material, status, dan unit organisasi.
-
-### 16.5 Ekspor
-
-- XLSX untuk data analitis.
-- PDF untuk formulir dan laporan resmi.
-- Ekspor besar diproses melalui queue.
-- Setiap hasil ekspor memiliki expiry dan audit download.
-
-## 17. Dashboard
-
-### 17.1 Filter Global
-
-- Periode.
-- Region/gudang.
-- Klasifikasi.
-- Kategori.
-- Status material.
-- Jenis transaksi.
-
-### 17.2 KPI
-
-- Total kuantitas dan nilai persediaan.
-- Total material persediaan dan ABT.
-- Jumlah transaksi penerimaan/pengeluaran.
-- Nilai material in-transit.
-- Nilai material quarantined/penyisihan.
-- Jumlah approval tertunda.
-- Selisih stock opname belum diselesaikan.
-
-### 17.3 Visualisasi Grafik
-
-Sesuai spesifikasi `Detail.xlsx`, dashboard dilengkapi dengan berbagai grafik interaktif:
-
-1. **Komposisi Nilai Persediaan Material (Rp dan %)**:
-   - **Grafik Pie Material Persediaan (MPS)**: Komposisi per Gudang, per Kategori (Tubular Goods, Fitting & Flange, dll), dan per Status Material (FM, SM, PDS, DS).
-   - **Grafik Pie Material Asset Belum Terpasang (ABT)**: Komposisi per Gudang, per Kategori, dan per Status Material (FM, SM, PDS, DS).
-2. **Transaksi Material (Rp dan %)**:
-   - **Grafik Pie Penerimaan Material**: Distribusi nilai transaksi per sub-klasifikasi transaksi.
-   - **Grafik Pie Pengeluaran Material**: Distribusi nilai transaksi per sub-klasifikasi transaksi.
-3. **Tingkat Persediaan (Inventory Levels)**:
-   - **Grafik Garis (Line Chart)**: Tren Saldo Akhir per Bulan untuk Material Persediaan dan Material ABT.
-   - **Grafik Batang (Bar Chart)**: Perbandingan Saldo Akhir tiap Tahun untuk Material Persediaan dan Material ABT.
-4. **Monitoring Operational & Approval**:
-   - **Grafik Aging Approval**: Transaksi mengantap per tahapan approval.
-   - **Grafik In-Transit**: Durasi pengiriman material antar gudang.
-
-## 18. QR Code
-
-Data yang tampil setelah scan:
-
-- Klasifikasi material.
-- Kategori material.
-- KIMAP.
-- Nama material.
-- UOM.
-- Periode perolehan.
-- Nomor kartu.
-- Gudang dan lokasi saat ini.
-- Kuantitas label dan sisa kuantitas.
-- Status material dan status stok.
-
-Aturan:
-
-- Token QR tidak mengandung harga atau data sensitif.
-- Label yang dibatalkan menampilkan status tidak aktif.
-- Cetak ulang wajib memiliki alasan.
-- Riwayat scan dan cetak disimpan.
-- Scan offline tidak termasuk baseline; tampilan dapat dibuat PWA dengan cache halaman dasar, tetapi validasi transaksi tetap membutuhkan koneksi server.
-
-## 19. Notifikasi
-
-Pemicu minimum:
-
-- Transaksi diajukan.
-- Approval ditugaskan.
-- Revision diminta.
-- Transaksi ditolak.
-- Approval selesai.
-- Material transfer belum diterima melewati SLA.
-- QR penerimaan belum dicetak.
-- Reservation mendekati kedaluwarsa.
-- Stock opname memiliki selisih.
-- Ekspor laporan selesai.
-
-Notifikasi disimpan di aplikasi. Email dapat diaktifkan per jenis notifikasi. Kegagalan pengiriman notifikasi tidak boleh membatalkan transaksi bisnis.
-
-## 20. Keamanan dan Audit
-
-- CSRF protection untuk web dan token authentication untuk API.
-- Rate limit pada login, scan, dan endpoint ekspor.
-- Password menggunakan Argon2id/bcrypt sesuai konfigurasi Laravel.
-- MFA dapat diwajibkan untuk Super Admin dan Accounting.
-- Authorization menggunakan policy pada setiap action.
-- File privat, signed URL, whitelist MIME, dan antivirus integration hook.
-- Enkripsi koneksi TLS dan enkripsi storage/database sesuai fasilitas infrastruktur.
-- Audit log mencakup login, perubahan master, perubahan transaksi, approval, posting, cetak ulang QR, ekspor, dan akses dokumen sensitif.
-- Log tidak menyimpan password, token, atau isi dokumen.
-- Backup database harian dan point-in-time recovery sesuai kemampuan platform.
-- Uji restore dilakukan berkala.
-
-## 21. Penanganan Error
-
-| Kondisi | Respons sistem |
-|---|---|
-| Stok tidak cukup | Tolak transaksi dan tampilkan available quantity terbaru |
-| Transaksi sudah berubah | Tolak dengan conflict response dan minta reload |
-| Approval bukan giliran pengguna | Forbidden dan catat security event |
-| Dokumen mandatory belum lengkap | Tolak submit dan tampilkan daftar dokumen kurang |
-| Upload gagal | Pertahankan draft dan izinkan retry |
-| Posting ganda | Kembalikan hasil posting sebelumnya melalui idempotency key |
-| Queue notifikasi gagal | Retry dengan backoff; transaksi tetap sah |
-| QR tidak valid/nonaktif | Tampilkan pesan aman tanpa membocorkan data material |
-| Export besar | Jalankan asynchronous dan kirim notifikasi saat selesai |
-
-## 22. Kebutuhan Nonfungsional
-
-| Aspek | Target baseline |
-|---|---|
-| Availability | 99,5% pada jam operasional |
-| Response time | P95 kurang dari 2 detik untuk transaksi normal |
-| Report list | P95 kurang dari 5 detik untuk filter umum |
-| Export besar | Asynchronous untuk lebih dari 10.000 baris |
-| Concurrency | Aman terhadap double posting dan overselling stok |
-| Audit retention | Minimal mengikuti kebijakan retensi perusahaan |
-| Browser | Dua versi terbaru Chrome/Edge |
-| Accessibility | Navigasi keyboard, label form, dan kontras yang memadai |
-| Localization | Bahasa Indonesia; timezone dan format tanggal terkonfigurasi |
-
-## 23. Strategi Testing
-
-### 23.1 Unit Test
-
-- Perhitungan saldo tersedia.
-- Moving weighted average.
-- Validasi subtype transaksi.
-- State transition.
-- Document requirement.
-- Penomoran transaksi.
-- QR token validation.
-
-### 23.2 Feature Test
-
-- Authorization per role dan gudang.
-- Create, submit, revision, reject, approve, post, cancel, dan reversal.
-- Upload dokumen.
-- Reservation dan release.
-- Transfer in-transit.
-- Stock opname dan adjustment.
-- Filter dan ekspor laporan.
-
-### 23.3 Concurrency Test
-
-- Dua user meminta material terakhir secara bersamaan.
-- Klik approval/posting berulang.
-- Retry request dengan idempotency key sama.
-- Transfer dan pengeluaran pada lot yang sama.
-
-### 23.4 Reconciliation Test
-
-Untuk setiap material dan gudang:
-
-```text
-opening balance + sum(movements) = closing balance
-```
-
-Total saldo projection harus sama dengan total ledger pada checkpoint rekonsiliasi.
-
-### 23.5 UAT
-
-UAT dilakukan menggunakan skenario nyata untuk setiap subtype transaksi, dokumen wajib, approval, laporan, QR, selisih stock opname, dan pembatasan akses gudang.
-
-## 24. Deployment dan Operasional
-
-### 24.1 Environment
-
-- Development.
-- Staging/UAT.
-- Production.
-
-### 24.2 Komponen Production
-
-- Nginx.
-- PHP-FPM application instances.
-- Queue worker dan scheduler.
-- PostgreSQL.
-- Redis.
-- S3-compatible object storage.
-- Centralized log dan monitoring.
-
-### 24.3 CI/CD
-
-Pipeline minimum:
-
-1. Install dependency.
-2. Static analysis dan code style.
-3. Unit/feature test.
-4. Build frontend asset.
-5. Security/dependency scan.
-6. Build deployment artifact/container.
-7. Deploy staging.
-8. Smoke test.
-9. Manual approval production.
-10. Deploy production dan health check.
-
-Migration database menggunakan strategi backward-compatible. Backup atau snapshot dilakukan sebelum migration berisiko tinggi.
-
-## 25. Roadmap Implementasi
-
-Estimasi berlaku untuk tim 3–5 orang: backend/full-stack, frontend/QA, dan product/business representative.
-
-| Fase | Durasi | Hasil |
-|---|---:|---|
-| 0. Discovery dan normalisasi data | 1–2 minggu | Master data sah, workflow final, prototype form |
-| 1. Foundation dan IAM | 2 minggu | Project, CI/CD, login, role, warehouse scope, audit dasar |
-| 2. Bank data dan inventory core | 3 minggu | Material, gudang, lokasi, lot, saldo, ledger, reservation |
-| 3. Penerimaan dan QR | 3 minggu | Workflow penerimaan sampai posting dan label QR |
-| 4. Pengeluaran dan pengembalian | 3 minggu | Workflow keluar/retur dan valuasi |
-| 5. Transfer dan penyisihan | 3 minggu | In-transit, destination receipt, quarantine/write-off |
-| 6. Stock opname dan inventarisasi | 2–3 minggu | Sesi hitung, selisih, adjustment |
-| 7. Laporan dan dashboard | 2–3 minggu | Laporan, ekspor, KPI, chart |
-| 8. Hardening dan UAT | 2 minggu | Security, performance, reconciliation, training, go-live |
-
-Total baseline: **18–23 minggu**, bergantung pada kesiapan master data, keputusan bisnis, dan kecepatan UAT.
-
-## 26. Struktur GitHub
-
-### 26.1 Label
-
-```text
-type:epic
-type:feature
-type:task
-type:bug
-area:iam
-area:master-data
-area:inventory
-area:transaction
-area:workflow
-area:warehouse
-area:reporting
-area:security
-priority:p0
-priority:p1
-priority:p2
-status:blocked
-needs:business-review
-```
-
-### 26.2 Milestone
-
-- M0 — Discovery.
-- M1 — Foundation.
-- M2 — Inventory Core.
-- M3 — Inbound and QR.
-- M4 — Outbound and Return.
-- M5 — Transfer and Write-off.
-- M6 — Stock Count.
-- M7 — Reporting.
-- M8 — UAT and Go-live.
-
-## 27. Backlog Epic dan Issue GitHub
-
-### EPIC-01 — Project Foundation
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-001 | Inisialisasi Laravel 12 dan standar struktur domain | P0 | - |
-| INV-002 | Konfigurasi PostgreSQL, Redis, queue, scheduler, dan storage | P0 | INV-001 |
-| INV-003 | Menyiapkan environment development, staging, production | P0 | INV-001 |
-| INV-004 | Menyiapkan CI untuk lint, static analysis, dan test | P0 | INV-001 |
-| INV-005 | Menyiapkan health check dan structured logging | P1 | INV-002 |
-| INV-006 | Menetapkan convention enum, DTO, action, event, dan policy | P1 | INV-001 |
-| INV-007 | Menyiapkan seed data minimum dan factory | P1 | INV-001 |
-
-### EPIC-02 — Identity, Role, dan Warehouse Scope
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-010 | Implementasi login, logout, reset password, dan session security | P0 | INV-001 |
-| INV-011 | Implementasi role dan permission granular | P0 | INV-010 |
-| INV-012 | Implementasi penugasan user ke gudang/region | P0 | INV-011 |
-| INV-013 | Implementasi organizational function dan position | P1 | INV-011 |
-| INV-014 | Membuat policy warehouse-scoped query | P0 | INV-012 |
-| INV-015 | Membuat halaman administrasi pengguna | P1 | INV-012 |
-| INV-016 | Menambahkan interface integrasi SSO | P2 | INV-010 |
-| INV-017 | Menulis test matriks akses lintas gudang | P0 | INV-014 |
-
-### EPIC-03 — Bank Data dan Material Master
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-020 | CRUD dan import gudang | P0 | INV-012 |
-| INV-021 | CRUD lokasi penyimpanan/rack/bin | P0 | INV-020 |
-| INV-022 | CRUD klasifikasi material | P0 | INV-001 |
-| INV-023 | CRUD kategori material | P0 | INV-001 |
-| INV-024 | CRUD UOM | P0 | INV-001 |
-| INV-025 | CRUD KIMAP dan master material | P0 | INV-022, INV-023, INV-024 |
-| INV-026 | CRUD status material dan effective date | P1 | INV-025 |
-| INV-027 | CRUD jenis/subtype transaksi | P0 | INV-001 |
-| INV-028 | CRUD jenis dokumen dan requirement per subtype | P0 | INV-027 |
-| INV-029 | Validasi dan laporan error import master data | P1 | INV-020, INV-025 |
-
-### EPIC-04 — Inventory Ledger dan Stock Balance
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-030 | Membuat model stock lot | P0 | INV-025 |
-| INV-031 | Membuat inventory movement append-only | P0 | INV-030 |
-| INV-032 | Membuat stock balance projection | P0 | INV-031 |
-| INV-033 | Membuat stock reservation service | P0 | INV-032 |
-| INV-034 | Implementasi moving weighted average service | P0 | INV-031 |
-| INV-035 | Implementasi posting dengan database row lock | P0 | INV-032 |
-| INV-036 | Implementasi idempotency key untuk posting | P0 | INV-035 |
-| INV-037 | Implementasi reversal dan adjustment | P1 | INV-035 |
-| INV-038 | Membuat rekonsiliasi ledger terhadap saldo | P0 | INV-032 |
-| INV-039 | Menulis concurrency test untuk stok terakhir | P0 | INV-033, INV-035 |
-
-### EPIC-05 — Workflow dan Dokumen
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-040 | Membuat state machine transaksi | P0 | INV-006 |
-| INV-041 | Membuat approval record dan stage assignment | P0 | INV-040, INV-014 |
-| INV-042 | Implementasi submit, approve, revision, reject, cancel | P0 | INV-041 |
-| INV-043 | Membuat transaction timeline dan history | P1 | INV-042 |
-| INV-044 | Implementasi upload dokumen privat | P0 | INV-028 |
-| INV-045 | Validasi dokumen mandatory berdasarkan subtype | P0 | INV-044 |
-| INV-046 | Membuat versioning dokumen setelah submit | P1 | INV-044 |
-| INV-047 | Membuat notifikasi tugas approval | P1 | INV-041 |
-
-### EPIC-06 — Penerimaan Material dan QR
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-050 | Membuat form draft penerimaan | P0 | INV-025, INV-040 |
-| INV-051 | Implementasi aturan subtype dan referensi penerimaan | P0 | INV-050 |
-| INV-052 | Implementasi approval User dan Persediaan | P0 | INV-041, INV-050 |
-| INV-053 | Implementasi check Staf Gudang dan lokasi material | P0 | INV-021, INV-052 |
-| INV-054 | Implementasi approval Kepala Gudang dan posting receipt | P0 | INV-035, INV-053 |
-| INV-055 | Membuat stock label dan secure QR token | P0 | INV-030, INV-054 |
-| INV-056 | Membuat template cetak QR dan watermark QR Passed | P1 | INV-055 |
-| INV-057 | Mencatat cetak ulang dan alasan | P1 | INV-056 |
-| INV-058 | Membuat formulir penerimaan PDF | P1 | INV-054 |
-
-### EPIC-07 — Pengeluaran dan Pengembalian
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-060 | Membuat form permintaan pengeluaran | P0 | INV-033, INV-040 |
-| INV-061 | Validasi available stock dan reservation | P0 | INV-060 |
-| INV-062 | Implementasi scan dan alokasi lot pengeluaran | P0 | INV-055, INV-061 |
-| INV-063 | Implementasi approval Kepala Gudang dan posting quantity | P0 | INV-035, INV-062 |
-| INV-064 | Implementasi verifikasi nilai oleh Persediaan | P0 | INV-034, INV-063 |
-| INV-065 | Membuat formulir pengeluaran dan surat jalan PDF | P1 | INV-063 |
-| INV-066 | Membuat form pengembalian berbasis transaksi asal | P0 | INV-060 |
-| INV-067 | Implementasi pemeriksaan dan posting pengembalian | P0 | INV-035, INV-066 |
-| INV-068 | Menangani pengembalian tanpa referensi historis | P1 | INV-067 |
-
-### EPIC-08 — Pemindahan dan Penyisihan
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-070 | Membuat form pemindahan antar gudang | P0 | INV-033, INV-040 |
-| INV-071 | Implementasi scan dan approval gudang asal | P0 | INV-070 |
-| INV-072 | Implementasi status dan ledger in-transit | P0 | INV-031, INV-071 |
-| INV-073 | Implementasi konfirmasi penerima dan Persediaan asal | P0 | INV-072 |
-| INV-074 | Implementasi pemeriksaan dan approval gudang tujuan | P0 | INV-073 |
-| INV-075 | Menambahkan monitoring transfer terlambat | P1 | INV-072 |
-| INV-076 | Membuat form penyisihan dan quarantine reservation | P0 | INV-033, INV-040 |
-| INV-077 | Implementasi approval dan posting write-off | P0 | INV-037, INV-076 |
-| INV-078 | Membuat laporan material quarantined/written-off | P1 | INV-077 |
-
-### EPIC-09 — Stock Opname dan Inventarisasi
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-080 | Membuat sesi stock opname dan snapshot | P0 | INV-032 |
-| INV-081 | Membuat assignment petugas sesi | P1 | INV-012, INV-080 |
-| INV-082 | Implementasi scan/input physical count | P0 | INV-055, INV-080 |
-| INV-083 | Menghitung variance dan mewajibkan penjelasan | P0 | INV-082 |
-| INV-084 | Implementasi approval Kepala Gudang | P0 | INV-041, INV-083 |
-| INV-085 | Membuat adjustment dari selisih | P0 | INV-037, INV-084 |
-| INV-086 | Membuat sesi inventarisasi dan tim | P1 | INV-081 |
-| INV-087 | Membuat laporan stock opname dan inventarisasi | P1 | INV-084, INV-086 |
-
-### EPIC-10 — Laporan dan Dashboard
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-090 | Membuat laporan persediaan material | P0 | INV-032 |
-| INV-091 | Membuat laporan stok gudang | P0 | INV-032 |
-| INV-092 | Membuat laporan mutasi ledger | P0 | INV-031 |
-| INV-093 | Membuat rekapitulasi transaksi | P1 | INV-040 |
-| INV-094 | Membuat filter global dan saved view | P1 | INV-090 |
-| INV-095 | Membuat service ekspor asynchronous XLSX/PDF | P1 | INV-090, INV-091, INV-092 |
-| INV-096 | Membuat KPI dashboard | P1 | INV-090, INV-093 |
-| INV-097 | Membuat chart komposisi dan tren | P1 | INV-096 |
-| INV-098 | Membuat dashboard approval dan transfer aging | P1 | INV-043, INV-075 |
-
-### EPIC-11 — Security, Audit, dan Observability
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-100 | Membuat audit log terstruktur | P0 | INV-010 |
-| INV-101 | Mengaudit perubahan master data | P0 | INV-100, INV-020 |
-| INV-102 | Mengaudit approval, posting, reversal, dan ekspor | P0 | INV-100, INV-042 |
-| INV-103 | Menambahkan rate limit dan security header | P1 | INV-010 |
-| INV-104 | Menambahkan validasi keamanan upload | P0 | INV-044 |
-| INV-105 | Menambahkan queue monitoring dan failure alert | P1 | INV-002 |
-| INV-106 | Menambahkan reconciliation scheduled job | P0 | INV-038 |
-| INV-107 | Menyusun backup dan restore test procedure | P1 | INV-003 |
-
-### EPIC-12 — UAT, Migrasi, dan Go-live
-
-| ID | Issue | Prioritas | Dependensi |
-|---|---|---:|---|
-| INV-110 | Membersihkan dan mengesahkan master 17 gudang | P0 | INV-020 |
-| INV-111 | Membersihkan KIMAP, kategori, klasifikasi, dan UOM | P0 | INV-025 |
-| INV-112 | Menyiapkan template import saldo awal dan lot | P0 | INV-030 |
-| INV-113 | Melakukan dry run migrasi dan rekonsiliasi | P0 | INV-038, INV-112 |
-| INV-114 | Menulis skenario UAT seluruh subtype | P0 | Semua modul transaksi |
-| INV-115 | Melaksanakan performance dan concurrency test | P0 | INV-039, INV-095 |
-| INV-116 | Melaksanakan security review | P0 | EPIC-11 |
-| INV-117 | Menyiapkan manual pengguna dan pelatihan | P1 | UAT stabil |
-| INV-118 | Menyiapkan cutover dan rollback plan | P0 | INV-113, INV-116 |
-| INV-119 | Go-live dan hypercare | P0 | INV-118 |
-
-## 28. Template Isi GitHub Issue
-
-```markdown
-## Tujuan
-Jelaskan hasil bisnis/teknis yang harus dicapai.
-
-## Ruang Lingkup
-- Item pekerjaan yang termasuk.
-- Item pekerjaan yang tidak termasuk.
-
-## Acceptance Criteria
-- [ ] Skenario utama berhasil.
-- [ ] Authorization sesuai role dan gudang.
-- [ ] Validasi dan pesan error tersedia.
-- [ ] Audit log tercatat jika relevan.
-- [ ] Unit/feature test tersedia.
-- [ ] Dokumentasi diperbarui.
-
-## Dependensi
-- #nomor-issue
-
-## Catatan Teknis
-Keputusan implementasi, constraint database, event, dan endpoint terkait.
-```
-
-## 29. Acceptance Criteria Tingkat Sistem
-
-1. Pengguna hanya dapat mengakses gudang yang ditugaskan.
-2. Setiap workflow mengikuti urutan approval yang ditetapkan.
-3. Sistem menolak state transition yang tidak valid.
-4. Posting tidak dapat dilakukan dua kali.
-5. Stok tidak dapat menjadi negatif.
-6. Setiap movement dapat ditelusuri ke transaksi dan approval.
-7. Transfer memiliki posisi in-transit yang terukur.
-8. Penyisihan memiliki tahap quarantine sebelum write-off.
-9. Selisih opname tidak langsung mengubah saldo tanpa adjustment approval.
-10. QR nonaktif tidak dapat dipakai dalam transaksi baru.
-11. Laporan saldo dapat direkonsiliasi dengan ledger.
-12. Export dan dokumen menghormati hak akses gudang.
-
-## 30. Temuan Normalisasi dari `Detail.xlsx`
-
-Temuan berikut perlu disahkan pada Fase 0. Rancangan sudah memberikan rekomendasi agar proses tidak berhenti:
-
-| Temuan | Kondisi sumber | Rekomendasi baseline |
-|---|---|---|
-| Nama gudang nomor 3 berbeda | `DETAIL`: Gudang Panaran; `Sheet1`: Gudang Pekanbaru/PKR | Gunakan daftar master resmi; jangan impor sebelum business owner mengesahkan |
-| Kode Material Sirkulasi berbeda | Master memakai `SKL`; bagian laporan menyebut `MKL` | Gunakan `SKL` sebagai baseline dan sediakan mapping kode lama |
-| Urutan kategori berbeda | Cock and Valve serta Fitting and Flange tertukar antar-sheet | Gunakan kode unik; urutan tampilan tidak menjadi identitas |
-| Penomoran transfer tidak konsisten | Setelah langkah 6 terdapat langkah 5 FINISH | Gunakan urutan 1–7 sesuai workflow pada dokumen ini |
-| Harga dan jumlah disebut freetext | Berisiko menghasilkan data tidak numerik | Gunakan decimal tervalidasi dengan precision UOM/currency |
-| Metode valuasi tidak disebutkan | Harga laporan belum memiliki rule akuntansi | Gunakan moving weighted average sebagai baseline |
-| Koreksi selisih opname tidak dijelaskan | Risiko saldo berubah tanpa approval | Buat adjustment transaction terpisah |
-| Reject dan revision belum konsisten | Sebagian proses hanya menyebut reject | Pisahkan `revision_requested` dan `rejected` |
-| Tim Inventarisasi belum ada di daftar fungsi | Muncul pada workflow inventarisasi | Tambahkan contextual role Tim Inventarisasi |
-| Detail isi QR terbatas | Hanya menyebut beberapa atribut | Gunakan secure token dan tampilkan data server-side sesuai Bagian 18 |
-
-## 31. Definition of Done
-
-Satu issue dianggap selesai jika:
-
-- Acceptance criteria terpenuhi.
-- Authorization dan warehouse scope diuji.
-- Business rule berada pada domain/action, bukan hanya UI.
-- Migration memiliki constraint dan index yang diperlukan.
-- Unit/feature test lulus.
-- Tidak ada perubahan stok tanpa ledger.
-- Audit log tersedia untuk aktivitas penting.
-- Error message dapat dipahami pengguna.
-- Dokumentasi API dan workflow diperbarui.
-- Code review selesai.
-- Berhasil diuji pada staging.
-
-## 32. Urutan Implementasi yang Direkomendasikan
-
-1. Sahkan master gudang, kode transaksi, klasifikasi, kategori, UOM, dan KIMAP.
-2. Bangun IAM dan warehouse scope.
-3. Bangun inventory ledger, balance, lot, reservation, dan valuation.
-4. Bangun workflow generik serta dokumen.
-5. Implementasikan penerimaan sebagai vertical slice pertama.
-6. Validasi ledger dan laporan dasar menggunakan data penerimaan.
-7. Implementasikan pengeluaran dan pengembalian.
-8. Implementasikan transfer dan penyisihan.
-9. Implementasikan stock opname dan inventarisasi.
-10. Lengkapi laporan, dashboard, hardening, migrasi, dan UAT.
-
-Urutan ini menempatkan konsistensi stok sebagai fondasi. Modul transaksi tidak boleh dikembangkan terpisah dengan cara masing-masing memperbarui saldo secara langsung.
+Sequence per kombinasi subtype + gudang + periode, unique constraint, dibuat di server.
 
 ---
 
-## Penutup
+## 3. Struktur Database & Mapping Data (Sesuai Detail.xlsx)
 
-Rancangan ini mengubah daftar proses pada `Detail.xlsx` menjadi arsitektur aplikasi, workflow, model data, aturan kontrol stok, roadmap, dan backlog pengembangan yang dapat langsung dipindahkan menjadi GitHub Epic dan Issue. Langkah berikutnya adalah pengesahan master data dan workflow oleh business owner, kemudian pembuatan implementation plan teknis per milestone.
+### 3.1 Prinsip Skema
+
+1. **Immutable ledger** — `inventory_movements` append-only, punya `book_type` (`warehouse` | `inventory`).
+2. **Projection saldo** — `stock_balances` (Buku Gudang) dan `inventory_book_balances` (Buku Persediaan), di-update dalam satu DB transaction dengan `SELECT … FOR UPDATE`.
+3. **Lot + label** — kuantitas dan harga mengikuti lot; identitas fisik mengikuti kartu/QR.
+4. **Warehouse scope** — setiap query transaksi/stok terfilter gudang user.
+5. Tipe numerik: kuantitas `DECIMAL(14,4)`, uang `DECIMAL(18,4)`.
+
+### 3.2 Mapping Kolom Bisnis → Tabel
+
+| Kolom pada form/laporan (Excel/PDF) | Tabel.kolom | Tipe | Keterangan |
+|---|---|---|---|
+| Nomor transaksi | `inventory_transactions.transaction_number` | `varchar(50)` | Generated, unique |
+| Tanggal transaksi `DD/MM/YYYY` | `inventory_transactions.transaction_date` | `date` | Input user |
+| Periode perolehan `MM/YY` | `stock_lots.acquisition_period` | `char(6)` | `YYYYMM` dari tanggal inbound |
+| Kepada | `inventory_transactions.to_position_id` | FK `positions` | Bank data |
+| Dari | `inventory_transactions.from_position_id` | FK `positions` | Bank data |
+| Klasifikasi transaksi | `inventory_transactions.transaction_subtype_id` | FK | 1101…3300 |
+| Referensi / Berdasarkan | `transaction_references.reference_number` | `varchar(100)` | Freetext atau FK transaksi |
+| Upload dokumen | `transaction_documents.*` | metadata | File di object storage |
+| Penjelasan | `inventory_transactions.explanation` | `text` | Mandatory |
+| Klasifikasi material | `materials.classification_id` | FK | MPS, ABT, SKL, MT, MEJ |
+| Kategori material | `materials.category_id` | FK | TBG, CAV, FAF, INS, CHM |
+| KIMAP | `materials.kimap` | `varchar(30)` | Unique |
+| Nama material | `materials.name` | `varchar(255)` | Bank data |
+| Satuan / UOM | `materials.base_uom_id` / item `uom_id` | FK | Generated |
+| Jumlah diterima/diminta/dikeluarkan/dikembalikan/disisihkan | `inventory_transaction_items.*_quantity` | `decimal(14,4)` | Validasi ≥ 0 |
+| Harga satuan | `inventory_transaction_items.unit_price` | `decimal(18,4)` | Disembunyikan dari Staf Gudang |
+| Jumlah harga | `inventory_transaction_items.total_amount` | `decimal(18,4)` | `qty × price` |
+| Nomor kartu | `stock_labels.card_number` | `varchar(50)` | Unik per gudang |
+| Lokasi penyimpanan | `warehouse_locations.id` | FK | Zona/Rak/Bin |
+| Keterangan gudang | `inventory_transaction_items.notes` | `text` | Optional |
+| Status material | `material_status_assignments.status_code` | enum | FM/SM/PDS/DS |
+| Watermark approval | `transaction_approvals.watermark_stamp` | enum | CHECKED/APPROVED |
+| Saldo akhir | `stock_balances.on_hand_quantity` | `decimal(14,4)` | Buku Gudang |
+| QR Code | `stock_labels.qr_token` | `char(36)` | UUID |
+| Barcode | `stock_labels.barcode` | `varchar(64)` | Code-128 = nomor kartu |
+
+### 3.3 Rancangan Tabel Master Barang (Item Master)
+
+#### 3.3.1 `material_classifications`
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `code` | `varchar(10) UNIQUE` | Tidak | MPS, ABT, SKL, MT, MEJ |
+| `name` | `varchar(100)` | Tidak | |
+| `is_productive` | `boolean` | Tidak | Default true; false untuk stok penyisihan |
+| `sort_order` | `int` | Tidak | Default 0 |
+| `is_active` | `boolean` | Tidak | Default true |
+| `created_at` / `updated_at` | `timestamp` | Tidak | |
+
+#### 3.3.2 `material_categories`
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `code` | `varchar(10) UNIQUE` | Tidak | TBG, CAV, FAF, INS, CHM |
+| `name` | `varchar(100)` | Tidak | |
+| `requires_expiry` | `boolean` | Tidak | True untuk CHM |
+| `sort_order` | `int` | Tidak | |
+| `is_active` | `boolean` | Tidak | |
+| `created_at` / `updated_at` | `timestamp` | Tidak | |
+
+#### 3.3.3 `uoms`
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `code` | `varchar(10) UNIQUE` | Tidak | EA, MTR, SET, KG, LTR |
+| `name` | `varchar(50)` | Tidak | |
+| `decimal_precision` | `tinyint` | Tidak | 0–4 |
+| `is_active` | `boolean` | Tidak | |
+
+#### 3.3.4 `materials` — Item Master
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `kimap` | `varchar(30) UNIQUE` | Tidak | Kode identitas material |
+| `name` | `varchar(255)` | Tidak | Nama resmi bank data |
+| `classification_id` | `FK material_classifications` | Tidak | |
+| `category_id` | `FK material_categories` | Tidak | |
+| `base_uom_id` | `FK uoms` | Tidak | Satu UOM dasar fase 1 |
+| `description` | `text` | Ya | |
+| `min_stock_quantity` | `decimal(14,4)` | Tidak | Default 0; threshold low stock global |
+| `max_stock_quantity` | `decimal(14,4)` | Ya | Opsional overstock |
+| `reorder_point` | `decimal(14,4)` | Ya | Alert pemesanan |
+| `is_expiry_tracked` | `boolean` | Tidak | Default mengikuti kategori |
+| `shelf_life_days` | `int` | Ya | Untuk hitung FEFO / expired alert |
+| `is_serialized` | `boolean` | Tidak | Default false |
+| `is_active` | `boolean` | Tidak | Nonaktif tidak bisa transaksi baru |
+| `created_at` / `updated_at` | `timestamp` | Tidak | |
+
+Index: `(classification_id, category_id)`, `(name)` full-text/trigram sesuai engine.
+
+#### 3.3.5 `material_warehouse_settings`
+
+Threshold stok per gudang (mengalahkan nilai global item master).
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `material_id` | `FK materials` | Tidak | |
+| `warehouse_id` | `FK warehouses` | Tidak | |
+| `min_stock_quantity` | `decimal(14,4)` | Tidak | |
+| `reorder_point` | `decimal(14,4)` | Ya | |
+| Unique | `(material_id, warehouse_id)` | | |
+
+#### 3.3.6 `material_status_assignments`
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `material_id` | `FK materials` | Tidak | |
+| `warehouse_id` | `FK warehouses` | Tidak | Status dapat beda per gudang |
+| `status_code` | `enum(FM, SM, PDS, DS)` | Tidak | |
+| `effective_from` | `date` | Tidak | |
+| `effective_until` | `date` | Ya | Null = berlaku |
+| `reason` | `text` | Ya | |
+| `assigned_by` | `FK users` | Tidak | |
+
+#### 3.3.7 Master pendukung lokasi & organisasi
+
+**`warehouses`:** `id`, `code varchar(10) unique`, `name`, `region_code`, `address`, `timezone default Asia/Jakarta`, `is_active`.
+
+**`warehouse_locations`:** `id`, `warehouse_id FK`, `code varchar(50)`, `name`, `type enum(zone, rack, bin, staging_in, staging_out, transit, quarantine, non_productive)`, `parent_id FK self`, `capacity_quantity decimal(14,4) null`, `allowed_category_id FK null`, `is_active`, unique `(warehouse_id, code)`.
+
+**`users`:** `id`, `employee_number unique`, `name`, `email unique`, `password`, `status enum(active, inactive)`, `last_login_at`, timestamps.
+
+**`organizational_functions`:** `id`, `code unique`, `name`, `parent_id`, `is_active`.
+
+**`positions`:** `id`, `function_id FK`, `code unique`, `name`, `is_active`.
+
+**`user_position_assignments`:** `user_id`, `position_id`, `valid_from`, `valid_until`, `is_primary`.
+
+**`user_warehouse_assignments`:** `user_id`, `warehouse_id`, `role_id`, `role_scope varchar(50)`, `valid_from`, `valid_until`, unique `(user_id, warehouse_id, role_scope)`.
+
+**`transaction_subtypes`:** `id`, `code varchar(10) unique` (1101…3300), `main_type enum(receipt, issue, return, transfer, write_off, adjustment, rkm, disposal_proposal)`, `name`, `requires_reference boolean`, `requires_document boolean`, `is_active`.
+
+**`writeoff_reasons`** dan **`material_conditions`:** master bank data untuk usulan penghapusan (`code`, `name`, `is_active`).
+
+### 3.4 Rancangan Tabel Transaksi Stok (Masuk, Keluar, Mutasi, Opname)
+
+#### 3.4.1 `inventory_transactions` — Header
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `uuid PK` | Tidak | |
+| `transaction_number` | `varchar(50) UNIQUE` | Tidak | |
+| `transaction_type` | `enum` | Tidak | receipt, issue, return, transfer, write_off, adjustment, location_transfer |
+| `transaction_subtype_id` | `FK transaction_subtypes` | Tidak | |
+| `source_warehouse_id` | `FK warehouses` | Tidak | |
+| `destination_warehouse_id` | `FK warehouses` | Ya | Wajib untuk transfer |
+| `to_position_id` | `FK positions` | Tidak | Kolom Kepada |
+| `from_position_id` | `FK positions` | Tidak | Kolom Dari |
+| `transaction_date` | `date` | Tidak | |
+| `status` | `enum` | Tidak | Lihat 2.1 |
+| `current_stage` | `varchar(50)` | Tidak | |
+| `requested_by` | `FK users` | Tidak | |
+| `reference_text` | `varchar(255)` | Ya | Ringkasan “berdasarkan” |
+| `explanation` | `text` | Tidak | Mandatory |
+| `receiver_name` | `varchar(150)` | Ya | Pengeluaran/transfer |
+| `receiver_institution` | `varchar(150)` | Ya | |
+| `submitted_at` / `warehouse_posted_at` / `inventory_posted_at` / `completed_at` | `timestamp` | Ya | Dual posting |
+| `lock_version` | `int` | Tidak | Optimistic lock |
+| `created_at` / `updated_at` | `timestamp` | Tidak | |
+| `deleted_at` | `timestamp` | Ya | Soft delete hanya draft |
+
+#### 3.4.2 `inventory_transaction_items` — Detail
+
+| Kolom | Tipe | Null | Keterangan |
+|---|---|:---:|---|
+| `id` | `bigint PK` | Tidak | |
+| `transaction_id` | `FK uuid` | Tidak | Cascade |
+| `line_number` | `int` | Tidak | Unique per transaksi |
+| `material_id` | `FK materials` | Tidak | |
+| `uom_id` | `FK uoms` | Tidak | |
+| `source_location_id` | `FK warehouse_locations` | Ya | Bin asal |
+| `destination_location_id` | `FK warehouse_locations` | Ya | Bin tujuan / putaway |
+| `requested_quantity` | `decimal(14,4)` | Tidak | Diminta / dikembalikan / disisihkan |
+| `processed_quantity` | `decimal(14,4)` | Tidak | Diterima / dikeluarkan; default 0 |
+| `unit_price` | `decimal(18,4)` | Tidak | Default 0 |
+| `total_amount` | `decimal(18,4)` | Tidak | Generated |
+| `source_lot_id` | `FK stock_lots` | Ya | Lot FIFO/FEFO |
+| `source_stock_label_id` | `FK stock_labels` | Ya | Hasil scan |
+| `card_number` | `varchar(50)` | Ya | Snapshot kartu |
+| `fifo_override_reason` | `text` | Ya | Wajib jika loncat lot |
+| `notes` | `text` | Ya | Keterangan staf gudang |
+| Unique | `(transaction_id, line_number)` | | |
+
+#### 3.4.3 `transaction_references`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `bigint PK` | |
+| `transaction_id` | `FK` | |
+| `reference_type` | `varchar(50)` | PO, DO, BAP, BAST, ND, SPK, SJ, FORM_TRANSFER, FORM_ISSUE, SURAT_GH_OMM, … |
+| `reference_number` | `varchar(100)` | |
+| `referenced_transaction_id` | `uuid FK null` | Contoh retur → pengeluaran asal |
+| `issued_at` | `date null` | |
+| `issuer` | `varchar(150) null` | Penyedia barang / asal material |
+
+#### 3.4.4 `transaction_documents`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `bigint PK` | |
+| `transaction_id` | `FK` | |
+| `document_type_code` | `varchar(30)` | PO, DO, BAP, BAST, ND_SPK, SJ_SIGNED, SURAT_GH_OMM, PHOTO |
+| `file_name` | `varchar(255)` | |
+| `object_key` | `varchar(500)` | Path storage |
+| `mime_type` | `varchar(100)` | Whitelist |
+| `size` | `bigint` | Byte |
+| `checksum` | `char(64)` | SHA-256 |
+| `version` | `int` | Default 1 |
+| `uploaded_by` / `uploaded_at` | FK / timestamp | |
+
+#### 3.4.5 `transaction_approvals`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `bigint PK` | |
+| `transaction_id` | `FK` | |
+| `stage_code` | `varchar(50)` | `user_approve`, `inventory_verify`, `warehouse_check`, `warehouse_head`, `receiver`, `dest_warehouse_check`, `dest_warehouse_head` |
+| `sequence` | `int` | Urutan workflow |
+| `required_role` | `varchar(50)` | |
+| `assigned_user_id` | `FK users null` | |
+| `decision` | `enum(pending, approved, rejected, revision_requested)` | |
+| `watermark_stamp` | `enum(CHECKED, APPROVED, QR_PASSED)` | |
+| `notes` | `text null` | Wajib jika reject/revision |
+| `actor_name_snapshot` / `position_snapshot` / `role_snapshot` | `varchar` | Bukti tidak berubah meski master berubah |
+| `decided_at` | `timestamp null` | |
+| `ip_address` | `varchar(45)` | |
+| `user_agent` | `text` | |
+
+#### 3.4.6 `transaction_histories`
+
+`id`, `transaction_id`, `activity`, `from_status`, `to_status`, `metadata json`, `actor_id`, `created_at`.
+
+#### 3.4.7 `stock_lots`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `bigint PK` | |
+| `warehouse_id` / `material_id` | FK | |
+| `acquisition_period` | `char(6)` | YYYYMM — dasar FIFO |
+| `received_at` | `timestamp` | Tie-breaker FIFO |
+| `expiry_date` | `date null` | Dasar FEFO |
+| `receipt_item_id` | `bigint null` | Asal inbound |
+| `unit_price` | `decimal(18,4)` | |
+| `original_quantity` / `remaining_quantity` | `decimal(14,4)` | |
+| `stock_class` | `enum(productive, non_productive)` | Penyisihan mengubah class |
+| `status` | `enum(active, exhausted, quarantined, written_off)` | |
+
+#### 3.4.8 `stock_labels`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `bigint PK` | |
+| `stock_lot_id` | FK | |
+| `warehouse_location_id` | FK | Bin saat ini |
+| `qr_token` | `char(36) UNIQUE` | UUID v4 |
+| `barcode` | `varchar(64) UNIQUE` | Code-128 |
+| `card_number` | `varchar(50)` | Unique `(warehouse_id via lot, card_number)` |
+| `label_quantity` / `remaining_quantity` | `decimal(14,4)` | |
+| `printed_count` | `int` | |
+| `last_printed_at` | `timestamp null` | |
+| `reprint_reason` | `text null` | Wajib saat cetak ulang |
+| `status` | `enum(active, consumed, void, reprinted)` | |
+
+#### 3.4.9 `inventory_movements` — Ledger
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `uuid PK` | |
+| `transaction_id` / `transaction_item_id` | FK | |
+| `book_type` | `enum(warehouse, inventory)` | Dual book |
+| `warehouse_id` / `warehouse_location_id` | FK | |
+| `material_id` / `stock_lot_id` | FK | |
+| `stock_label_id` | FK null | |
+| `movement_type` | `enum` | inbound, outbound, transit_in, transit_out, putaway, bin_move, quarantine, write_off, adjustment |
+| `quantity_delta` | `decimal(14,4)` | + masuk / − keluar |
+| `amount_delta` | `decimal(18,4)` | |
+| `occurred_at` | `timestamp` | |
+| `posted_by` | `FK users` | |
+| `reversal_of_id` | `uuid null` | |
+| Index | `(book_type, warehouse_id, material_id, occurred_at)` | Stock card & mutasi |
+
+#### 3.4.10 `stock_balances` — Proyeksi Buku Gudang
+
+Unique `(warehouse_id, warehouse_location_id, material_id, stock_lot_id, stock_class)`.
+
+Kolom kuantitas: `on_hand_quantity`, `reserved_quantity`, `in_transit_quantity`, `quarantined_quantity`.
+
+Formula aplikasi:
+
+```text
+available = on_hand − reserved − quarantined
+```
+
+Tidak boleh negatif setelah posting.
+
+#### 3.4.11 `inventory_book_balances` — Proyeksi Buku Persediaan
+
+Unique `(warehouse_id, material_id, stock_lot_id, stock_class)`.
+
+Kolom: `quantity`, `average_unit_cost`, `total_value`, timestamps.
+
+#### 3.4.12 `stock_reservations`
+
+`id`, `transaction_item_id`, `stock_lot_id`, `reserved_quantity`, `consumed_quantity`, `status enum(active, fulfilled, released, expired)`, `expires_at`.
+
+#### 3.4.13 Stock Opname / Inventarisasi
+
+**`stock_count_sessions`:** `session_number unique`, `session_type enum(stock_opname, inventarisasi)`, `warehouse_id`, `period_start`, `period_end`, `snapshot_at`, `scope`, `status enum(draft, in_progress, completed, approved, cancelled)`, `created_by`, `approved_by`.
+
+**`stock_count_items`:** `session_id`, `material_id`, `stock_lot_id`, `stock_label_id`, `count_method enum(manual, qr_scan)`, `system_quantity`, `physical_quantity`, `variance_quantity`, `explanation` (wajib jika variance ≠ 0), `scanned_label_tokens json`, `counted_by`, `counted_at`.
+
+**`inventory_adjustments`:** `stock_count_session_id`, `status enum(draft, pending_approval, approved, posted, rejected)`, `reason`, `approved_by_head`, `approved_by_inventory`, `posted_at`. Saat posted, engine menulis pasangan movement warehouse + inventory.
+
+#### 3.4.14 RKM & Usulan Penghapusan
+
+**`material_requirement_plans`:** `plan_number`, `warehouse_id`, `plan_date`, `classification_id`, `status`, `justification`, `requested_by`.
+
+**`material_requirement_plan_items`:** `material_id`, `acquisition_period`, `bq_quantity`, `soh_quantity`, `als_quantity`, `avs_quantity`, `nci_quantity`, `ci_quantity`, `pr_quantity`. Constraint aplikasi: `nci_quantity ≤ 2 × soh_quantity`.
+
+**`disposal_proposals`:** `proposal_number`, `to_position_id`, `from_position_id`, `classification_id`, `explanation`, `status`, `holder_notes`, `requested_by`.
+
+**`disposal_proposal_items`:** `material_id`, `acquisition_year`, `warehouse_id`, `quantity`, `reason_id`, `condition_id`, `notes`, `acquisition_value`, `book_value`.
+
+### 3.5 Relasi Antar Tabel (Database Schema Relations)
+
+```mermaid
+erDiagram
+    USERS ||--o{ USER_WAREHOUSE_ASSIGNMENTS : scoped
+    WAREHOUSES ||--o{ USER_WAREHOUSE_ASSIGNMENTS : grants
+    WAREHOUSES ||--o{ WAREHOUSE_LOCATIONS : contains
+    WAREHOUSE_LOCATIONS ||--o{ WAREHOUSE_LOCATIONS : parent_of
+
+    MATERIAL_CLASSIFICATIONS ||--o{ MATERIALS : classifies
+    MATERIAL_CATEGORIES ||--o{ MATERIALS : categorizes
+    UOMS ||--o{ MATERIALS : measures
+    MATERIALS ||--o{ MATERIAL_STATUS_ASSIGNMENTS : aging_status
+    MATERIALS ||--o{ MATERIAL_WAREHOUSE_SETTINGS : thresholds
+
+    MATERIALS ||--o{ STOCK_LOTS : batches
+    WAREHOUSES ||--o{ STOCK_LOTS : stores
+    STOCK_LOTS ||--o{ STOCK_LABELS : prints
+    WAREHOUSE_LOCATIONS ||--o{ STOCK_LABELS : placed_at
+
+    TRANSACTION_SUBTYPES ||--o{ INVENTORY_TRANSACTIONS : typed
+    INVENTORY_TRANSACTIONS ||--|{ INVENTORY_TRANSACTION_ITEMS : lines
+    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_REFERENCES : based_on
+    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_DOCUMENTS : attaches
+    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_APPROVALS : workflow
+    INVENTORY_TRANSACTIONS ||--o{ TRANSACTION_HISTORIES : audit
+    INVENTORY_TRANSACTION_ITEMS ||--o{ INVENTORY_MOVEMENTS : posts
+    INVENTORY_MOVEMENTS }o--|| STOCK_LOTS : affects
+    STOCK_LOTS ||--o{ STOCK_BALANCES : warehouse_book
+    STOCK_LOTS ||--o{ INVENTORY_BOOK_BALANCES : inventory_book
+    INVENTORY_TRANSACTION_ITEMS ||--o{ STOCK_RESERVATIONS : holds
+
+    STOCK_COUNT_SESSIONS ||--|{ STOCK_COUNT_ITEMS : counted
+    STOCK_COUNT_SESSIONS ||--o{ INVENTORY_ADJUSTMENTS : corrects
+```
+
+Relasi implementasi (Eloquent) yang wajib:
+
+| Model | Relasi | Target | Kegunaan |
+|---|---|---|---|
+| `User` | `belongsToMany warehouses` | `Warehouse` | Scope akses |
+| `Warehouse` | `hasMany locations` | `WarehouseLocation` | Zoning |
+| `Material` | `belongsTo classification/category/baseUom` | master | Item master |
+| `Material` | `hasMany stockLots` | `StockLot` | FIFO/FEFO |
+| `StockLot` | `hasMany stockLabels` | `StockLabel` | QR/kartu |
+| `InventoryTransaction` | `hasMany items/documents/approvals/movements` | — | Dokumen utuh |
+| `StockBalance` | accessor `available_quantity` | — | Validasi outbound |
+
+### 3.6 Constraint & Aturan Integritas
+
+1. `materials.kimap`, `warehouses.code`, `inventory_transactions.transaction_number`, `stock_labels.qr_token` unique.
+2. `available_quantity ≥ 0`; posting yang membuat negatif **wajib gagal** (row lock).
+3. Transfer: `source_warehouse_id ≠ destination_warehouse_id`.
+4. Satu approval aktif per `(transaction_id, stage_code, sequence)`.
+5. Transaksi `posted`/`completed` tidak bisa dihapus; draft saja yang soft-delete.
+6. `total_amount` dihitung server, bukan dari klien.
+7. Idempotency key pada endpoint approve/post untuk cegah double submit.
+8. Rekonsiliasi harian:
+
+```text
+opening + SUM(inventory_movements.quantity_delta) = closing
+per (book_type, warehouse, material, lot)
+```
+
+### 3.7 Mesin Posting (untuk developer)
+
+Urutan wajib dalam `DB::transaction`:
+
+1. Otorisasi + validasi state machine.
+2. `lockForUpdate` pada `stock_balances` / `inventory_book_balances` + reservation.
+3. Validasi ulang qty dan `lock_version`.
+4. Insert `inventory_movements` (satu atau dua baris sesuai buku yang jatuh tempo).
+5. Update projection saldo.
+6. Update status transaksi + approval snapshot.
+7. Tulis `audit_logs` + outbox notifikasi.
+8. Commit. Worker mengirim notifikasi setelah commit.
+
+---
+
+## 4. Spesifikasi Modul & Fitur Aplikasi
+
+### 4.1 Dashboard & Notifikasi Real-time
+
+#### 4.1.1 Filter global
+
+Periode, region/gudang, klasifikasi (MPS/ABT/SKL/MT/MEJ), kategori, status material (FM/SM/PDS/DS), jenis transaksi.
+
+Filter gudang otomatis ter-scope kecuali permission `dashboard.view_all_warehouses`.
+
+#### 4.1.2 KPI
+
+| KPI | Sumber |
+|---|---|
+| Total qty & nilai persediaan produktif | `inventory_book_balances` stock_class=productive |
+| Nilai MPS vs ABT | join klasifikasi |
+| Jumlah transaksi penerimaan / pengeluaran periode | header posted |
+| Nilai in-transit | `stock_balances.in_transit_quantity` |
+| Nilai non-produktif / penyisihan | stock_class=non_productive |
+| Approval tertunda & aging | `transaction_approvals.decision=pending` |
+| Selisih opname belum adjustment | `inventory_adjustments.status != posted` |
+| Item low stock | on_hand vs min_stock |
+| Lot expired / expiring | `stock_lots.expiry_date` |
+
+#### 4.1.3 Visualisasi (sesuai PDF / Excel)
+
+| Grup | Metric | Dimensi | Tipe grafik |
+|---|---|---|---|
+| Komposisi nilai MPS | Rp dan % | Per gudang / kategori / status FM-SM-PDS-DS | Pie |
+| Komposisi nilai ABT | Rp dan % | Per gudang / kategori / status | Pie |
+| Transaksi material | Penerimaan Rp & % | Per klasifikasi transaksi | Bar |
+| Transaksi material | Pengeluaran Rp & % | Per klasifikasi transaksi | Bar |
+| Tingkat persediaan MPS | Saldo akhir per bulan | Tahun berjalan | Line |
+| Tingkat persediaan MPS | Saldo akhir per tahun | Multi tahun | Bar |
+| Tingkat persediaan ABT | Saldo akhir per bulan / tahun | | Line / Bar |
+| Operasional | Aging approval, durasi in-transit | | Bar horizontal |
+
+View SQL baseline: `vw_dashboard_inventory_composition` (agregasi gudang × klasifikasi × kategori × status × nilai).
+
+#### 4.1.4 Notifikasi real-time
+
+Kanal: in-app (wajib) + email opsional. Transport: Redis queue + broadcast (Laravel Echo / polling 15 detik sebagai fallback). Kegagalan kirim **tidak** membatalkan transaksi.
+
+| Kode event | Pemicu | Penerima | Prioritas |
+|---|---|---|---|
+| `txn.submitted` | Submit tahap | PIC tahap berikutnya | Normal |
+| `txn.revision` | Revision requested | Pelaku sebelumnya | Tinggi |
+| `txn.rejected` | Reject | Pembuat | Tinggi |
+| `txn.approved` | Approval selesai tahap | PIC berikutnya | Normal |
+| `qr.print_pending` | Inbound warehouse posted, QR belum lengkap | Staf & Kepala Gudang | Tinggi |
+| `transfer.overdue` | In-transit > SLA (default 7 hari) | User asal, Kepala kedua gudang, Persediaan | Tinggi |
+| `reservation.expiring` | Reservasi mendekati kedaluwarsa | Pembuat outbound | Normal |
+| `opname.variance` | Variance ≠ 0 | Kepala Gudang, Persediaan | Tinggi |
+| `stock.low` | `available ≤ min_stock` atau reorder point | Persediaan, Kepala Gudang, User gudang | Tinggi |
+| `stock.expired` | `expiry_date ≤ today` | Staf Gudang, Persediaan | Kritis |
+| `stock.expiring` | `expiry_date ≤ today + 30 hari` | Staf Gudang, Persediaan | Tinggi |
+| `stock.dead` | Status PDS/DS baru | Holder, Persediaan | Normal |
+| `export.ready` | Job ekspor selesai | Peminta | Normal |
+
+Low stock dievaluasi job setiap 15 menit dan **on posting**. Expired dievaluasi scheduler harian 00:05 WIB plus on inbound (jika FEFO). Deduplikasi alert: satu open alert per `(type, warehouse_id, material_id, lot_id)` sampai diselesaikan.
+
+### 4.2 Manajemen Inventaris & Barcode / QR Generator
+
+#### 4.2.1 Inventory Material List (IML)
+
+Halaman posisi stok per gudang dengan filter klasifikasi, kategori, status, lokasi, lot, kartu. Kolom: KIMAP, nama, UOM, bin, nomor kartu, periode perolehan, expiry, on-hand, reserved, available, in-transit, quarantined, status FM–DS, nilai (hanya peran yang berhak). Dipakai juga sebagai pemilih item RKM.
+
+#### 4.2.2 Kartu Stok (Stock Card)
+
+Satu kartu per kombinasi gudang + KIMAP (+ lot/kartu). Menampilkan saldo berjalan dari ledger Buku Gudang:
+
+| Tanggal | No. transaksi | Klasifikasi trx | Referensi | Masuk | Keluar | Saldo | Lokasi | User posting | Keterangan |
+|---|---|---|---|---|---|---|---|---|---|
+
+Saldo awal periode + mutasi = saldo akhir. Ekspor Excel/PDF.
+
+#### 4.2.3 Generator QR & Barcode
+
+| Aspek | Spesifikasi |
+|---|---|
+| QR payload | Hanya `qr_token` UUID; data lengkap diambil API `GET /qr/{token}` setelah otorisasi |
+| Barcode | Code-128 = `barcode` / nomor kartu, untuk scanner laser gudang |
+| Konten cetak label | Klasifikasi, KIMAP, nama (dipotong), UOM, periode perolehan, nomor kartu, kode gudang, kode bin, QR, barcode |
+| Cetak | Wajib setelah inbound Kepala Gudang approve; batch print per transaksi |
+| Cetak ulang | Wajib alasan; `printed_count++`; status `reprinted`; audit |
+| Label void | Tidak dapat di-scan untuk transaksi baru |
+| Watermark | `QR Passed` pada formulir penerimaan jika semua item `printed_count ≥ 1` |
+
+Endpoint: `POST /transactions/{id}/labels/print`, `POST /labels/{id}/reprint`, `GET /qr/{token}`, `POST /scan`.
+
+#### 4.2.4 Operasi gudang lain
+
+- Pindah bin internal.
+- Monitor reserved / in-transit / quarantine / non-produktif.
+- Pending process: QR belum cetak, transfer overdue, approval menumpuk.
+
+### 4.3 Modul Laporan
+
+Setiap laporan dapat difilter: gudang, periode, klasifikasi material (MPS, ABT, MEJ, MT, SKL/MKL), status FM/SM/PDS/DS, penyisihan (produktif vs non-produktif), jenis transaksi, KIMAP.
+
+| Kode | Nama | Isi minimum | Frekuensi |
+|---|---|---|---|
+| RPT-01 | Laporan Persediaan Material | Gudang, klasifikasi, kategori, KIMAP, nama, UOM, periode perolehan, nomor kartu, saldo awal, penerimaan, pengeluaran, penyisihan, saldo akhir, harga satuan, nilai, status | Harian / bulanan / ad-hoc |
+| RPT-02 | Laporan Stok Gudang | Qty operasional per gudang, zona/rak/bin, lot, kartu, status stok | Harian / ad-hoc |
+| RPT-03 | Laporan Mutasi | Movement berurutan produktif: waktu, no trx, klasifikasi trx, referensi, masuk, keluar, harga, nilai, saldo berjalan, user | Harian / bulanan |
+| RPT-04 | Rekapitulasi Penerimaan | Agregasi 1101/1103/1104/1107 | Bulanan |
+| RPT-05 | Rekapitulasi Pengeluaran | Agregasi 2201–2206 | Bulanan |
+| RPT-06 | Rekapitulasi Penyisihan | Agregasi 3300 | Bulanan |
+| RPT-07 | Stock Card | Lihat 4.2.2 | Ad-hoc |
+| RPT-08 | Laporan Stock Opname | Snapshot, fisik, selisih, penjelasan, approval | Per sesi |
+| RPT-09 | Laporan Inventarisasi | Sama seperti opname, PIC Tim Inventarisasi | Per sesi |
+| RPT-10 | Laporan In-Transit | Transfer belum complete, aging | Harian |
+| RPT-11 | Laporan Non-Produktif | Stok penyisihan | Bulanan |
+| RPT-12 | Low Stock & Expired | Item di bawah min / lot expired | Harian |
+
+#### 4.3.1 Ekspor Excel / PDF
+
+- XLSX untuk analitik (kolom sesuai laporan).
+- PDF untuk formulir resmi (penerimaan, pengeluaran, surat jalan, pemindahan, penyisihan, RKM, usulan hapus) lengkap stempel digital.
+- `> 10.000` baris diproses queue; notifikasi saat siap; unduhan ber-expiry dan diaudit.
+- Watermark `CHECKED` / `APPROVED` / `QR Passed` diambil dari snapshot `transaction_approvals`, tidak bisa dipalsukan dari klien.
+
+### 4.4 Modul Lain yang Wajib Ada
+
+| Modul | Fitur inti |
+|---|---|
+| IAM | Login Fortify, reset password, Spatie role/permission, penugasan gudang |
+| Bank Data | CRUD/import Excel master di bagian 1.7 dan 3.3 |
+| Transaksi | DataTables server-side, form bertahap, inbox approval, timeline |
+| RKM | IML picker, validasi NCI, generate CI/PR |
+| Usulan Penghapusan | Alur User → Holder → Accounting → Holder → trigger 3300 |
+| Audit Log | Halaman Super Admin / Auditor |
+
+Halaman minimum: Login, Dashboard role-based, Inbox tugas, Daftar & detail transaksi, Scan QR, Posisi stok, Stock card, Sesi opname, Administrasi master, Audit log.
+
+---
+
+## 5. Kebutuhan Non-Fungsional
+
+### 5.1 Keamanan Sistem
+
+| Kontrol | Spesifikasi |
+|---|---|
+| Transport | TLS 1.2+ pada semua environment non-lokal |
+| Autentikasi | Laravel Fortify/Sanctum; password Argon2id/bcrypt; session regenerate on login |
+| MFA | Wajib Super Admin dan Accounting; opsional peran lain |
+| Otorisasi | Policy per aksi + query scope gudang; `@can` / `permission:` middleware |
+| CSRF | Aktif untuk web; API memakai token |
+| Rate limit | Login, scan, ekspor, approval |
+| Upload | Whitelist MIME (`pdf, jpg, jpeg, png, xlsx, docx`), batas ukuran (disarankan 10 MB), checksum, hook antivirus |
+| Storage | Bucket privat; unduhan signed URL berumur pendek |
+| Rahasia harga | Field harga tidak dikirim ke payload Staf/Kepala Gudang |
+| QR | Token tidak memuat harga; token void ditolak tanpa membocorkan data material |
+| Header | HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy |
+| Backup | Harian + point-in-time; uji restore berkala |
+| SSO | Interface disiapkan; tidak memblokir go-live fase 1 |
+
+### 5.2 Performa
+
+| Aspek | Target baseline |
+|---|---|
+| Ketersediaan | 99,5% pada jam operasional |
+| Transaksi interaktif | P95 < 2 detik |
+| List DataTables terfilter | P95 < 5 detik |
+| Dashboard KPI | P95 < 3 detik (view/agregat terindeks) |
+| Ekspor besar | Asinkron > 10.000 baris |
+| Concurrency | Aman terhadap double posting dan overselling (row lock + idempotency) |
+| Job alert | Low stock ≤ 15 menit; expired ≤ H+0 00:05 WIB |
+| Browser | Dua versi terbaru Chrome/Edge |
+| Bahasa | Indonesia; timezone `Asia/Jakarta`; tanggal tampilan `DD/MM/YYYY` |
+
+Index wajib: `(transaction_number)`, `(source_warehouse_id, status, transaction_date)`, `(warehouse_id, material_id)` pada balances, `(qr_token)`, `(book_type, warehouse_id, material_id, occurred_at)` pada movements.
+
+Cache Redis: katalog master, komposisi dashboard (invalidate on posting).
+
+### 5.3 Pencatatan Log Aktivitas Pengguna (Audit Trail)
+
+Tabel `audit_logs` append-only:
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `uuid` | |
+| `occurred_at` | `timestamp` | |
+| `actor_id` | `FK users null` | Null untuk sistem/job |
+| `actor_name_snapshot` | `varchar` | |
+| `role_snapshot` | `varchar` | |
+| `warehouse_id` | `FK null` | |
+| `action` | `varchar(50)` | login, logout, create, update, submit, approve, reject, post, reverse, print, reprint, export, download, scan |
+| `auditable_type` / `auditable_id` | morph | |
+| `before_json` / `after_json` | `json null` | Tidak boleh berisi password, token, isi file |
+| `ip_address` | `varchar(45)` | |
+| `user_agent` | `text` | |
+| `request_id` | `uuid` | Korelasi log aplikasi |
+
+Peristiwa wajib tercatat: login gagal/sukses, perubahan master, seluruh transisi workflow, posting/reversal, cetak/cetak ulang QR, scan, ekspor, unduh dokumen, perubahan threshold alert, perubahan role/gudang user.
+
+Retensi mengikuti kebijakan perusahaan (baseline 5 tahun untuk transaksi dan audit). Log aplikasi terpusat, terstruktur JSON, tanpa menyimpan rahasia.
+
+Halaman Audit: filter waktu, aktor, aksi, gudang, nomor transaksi; hanya `audit.view`.
+
+### 5.4 Penanganan Error Bisnis
+
+| Kondisi | Respons |
+|---|---|
+| Stok tidak cukup | HTTP 422, tampilkan `available_quantity` terbaru |
+| Melanggar FIFO/FEFO tanpa alasan | 422, minta `fifo_override_reason` |
+| `NCI > 2 × SOH` | 422 pada RKM |
+| Qty diterima > qty dikembalikan / qty dikeluarkan > qty diminta | 422 |
+| Transaksi berubah (lock_version) | 409 Conflict, minta reload |
+| Approval bukan giliran / bukan gudangnya | 403, security event |
+| Dokumen mandatory kurang | 422, daftar jenis dokumen yang kurang |
+| Posting ganda | Kembalikan hasil semula via idempotency key |
+| QR tidak valid/nonaktif | Pesan aman, tanpa data material |
+| Queue notifikasi gagal | Retry backoff; transaksi tetap sah |
+
+### 5.5 Observability & Operasional
+
+- Health check, queue monitor, failed job alert.
+- Job rekonsiliasi ledger vs projection setiap malam; selisih → alert Super Admin.
+- Environment: development, staging/UAT, production.
+- CI minimum: lint, test, dependency scan, build, deploy staging, smoke, approval production.
+
+---
+
+## Lampiran A — Matriks Dual Posting
+
+| Modul | Buku Gudang terposting | Buku Persediaan terposting |
+|---|---|---|
+| Penerimaan 1101/1103/1104/1107 | Approval Kepala Gudang | Approval Fungsi Persediaan (lebih awal) |
+| Pengeluaran 2201–2206 | Approval Kepala Gudang | Approval Fungsi Persediaan (setelah SJ penerima) |
+| Pengembalian 1102/1105/1106 | Approval Kepala Gudang | Approval Fungsi Persediaan |
+| Transfer keluar | Approval Kepala Gudang asal → in-transit | Approval Persediaan asal |
+| Transfer masuk | Approval Kepala Gudang tujuan | Mengikuti penerimaan 1104 / kebijakan posting tujuan |
+| Penyisihan 3300 | Kepala Gudang: produktif − / non-produktif + | Persediaan: produktif − / non-produktif + |
+| Adjustment opname | Setelah kedua approval adjustment | Setelah kedua approval adjustment |
+| Pindah bin internal | Ya (qty tidak berubah, lokasi berubah) | Tidak |
+
+## Lampiran B — Temuan Normalisasi Sumber
+
+| Temuan | Sumber | Keputusan baseline |
+|---|---|---|
+| Nama gudang 3 berbeda | DETAIL: Panaran; Sheet1: Pekanbaru/PKR | Pakai Sheet1 `PKR` sampai pengesahan |
+| Kode sirkulasi | Master `SKL`; laporan `MKL` | Simpan `SKL`, mapping `MKL` |
+| Urutan kategori tertukar | DETAIL vs Sheet1 | Identitas = kode, bukan urutan |
+| Nomor langkah transfer 6 lalu 5 FINISH | Excel | Ikuti PDF 8 langkah berurutan |
+| Lokasi disebut freetext | Excel/PDF | Master Zona/Rak/Bin + catatan |
+| Harga disebut freetext | Excel | `DECIMAL` tervalidasi |
+| Upload pengeluaran optional vs MODUL “Ya” | PDF vs tab MODUL | Optional di form; reviewer boleh reject untuk 2202/2203/2206 |
+| Submit vs CHECKED Staf Gudang | PDF vs Excel | Tombol Submit, stempel CHECKED |
+| Metode valuasi tidak disebut | — | Moving weighted average + FIFO/FEFO fisik |
+| Tim Inventarisasi tidak ada di daftar fungsi DETAIL | Muncul di PROSES | Ditambah sebagai peran |
+| RKM & Usulan Penghapusan | Ada di PDF, minim di Excel | Masuk lingkup sesuai PDF |
+
+## Lampiran C — Definition of Done Implementasi
+
+1. Pengguna hanya mengakses gudang yang ditugaskan.
+2. Workflow menolak transisi tidak sah.
+3. Dual posting sesuai Lampiran A.
+4. Stok tidak negatif; posting tidak ganda.
+5. Picking memaksa scan QR dan FIFO/FEFO.
+6. Selisih opname tidak mengubah saldo tanpa adjustment.
+7. QR void tidak dipakai transaksi baru.
+8. Laporan saldo = ledger.
+9. Alert low stock & expired aktif.
+10. Audit trail lengkap tanpa menyimpan rahasia.
+
+---
+
+**Penutup.** Dokumen versi 2.0 merapikan rancangan DIGIO Inventory menjadi lima bagian implementasi: tujuan & RBAC, workflow operasional (inbound, zoning, outbound FIFO/FEFO, opname), skema data yang memetakan seluruh kolom `Detail.xlsx`, spesifikasi modul dashboard/label/laporan, serta keamanan–kinerja–audit. Langkah berikutnya adalah pengesahan master gudang nomor 3 dan UAT skenario per subtype transaksi.
